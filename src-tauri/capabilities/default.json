@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the main MaskForge window: core APIs plus a folder/file-picker-only slice of the dialog plugin, and an HTTP permission scoped to 127.0.0.1 only (any port) so the frontend's fetch() calls to the local sidecar are allowed by the webview's network layer — Tauri's custom-scheme webview does not permit fetch() to any origin outside its own by default, even loopback, without this. The sidecar is always spawned from Rust setup code (see src-tauri/src/sidecar.rs), never invoked from the webview, so no shell-plugin permission is granted here — that would let a compromised frontend dependency spawn/open arbitrary processes via the plugin's JS API even though this app's own TypeScript never calls it.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    {
+      "identifier": "http:default",
+      "allow": [{ "url": "http://127.0.0.1:*" }]
+    }
+  ]
+}

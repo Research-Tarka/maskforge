@@ -1,0 +1,13 @@
+name: Build Linux
+
+# Phase 3 (see PLAN.md) — not active in V1. Enable by adding a tag/dispatch
+# trigger once Linux packaging (AppImage/deb) has been set up.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "Linux build pipeline is planned for Phase 3 and not yet implemented."

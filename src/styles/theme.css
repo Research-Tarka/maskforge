@@ -1,0 +1,78 @@
+/**
+ * CSS custom properties for light/dark themes. Components must reference
+ * these variables rather than hardcoding colors so the theme toggle in
+ * the toolbar (uiStore.theme) applies uniformly across the app.
+ */
+
+:root {
+  --font-sans: -apple-system, "Segoe UI", Roboto, "Inter", sans-serif;
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  --panel-width: 280px;
+  --toolbar-height: 44px;
+  --status-bar-height: 28px;
+}
+
+[data-theme="dark"] {
+  --color-bg-app: #14161c;
+  --color-bg-surface: #1a1d24;
+  --color-bg-surface-raised: #21252e;
+  --color-bg-inset: #10121780;
+  --color-border: #2c3038;
+  --color-border-strong: #3a3f4a;
+
+  --color-text-primary: #e8eaef;
+  --color-text-secondary: #9aa0ac;
+  --color-text-tertiary: #666c78;
+  --color-text-inverse: #14161c;
+
+  --color-accent: #5b8cff;
+  --color-accent-hover: #7aa0ff;
+  --color-accent-muted: #2b3550;
+
+  --color-success: #47c98d;
+  --color-warning: #e0b24a;
+  --color-danger: #e2605c;
+
+  --color-status-todo: #6b7280;
+  --color-status-in-progress: #5b8cff;
+  --color-status-validated: #47c98d;
+  --color-status-flagged: #e2605c;
+
+  --canvas-checker: #0f1116;
+  --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="light"] {
+  --color-bg-app: #f3f4f6;
+  --color-bg-surface: #ffffff;
+  --color-bg-surface-raised: #fafbfc;
+  --color-bg-inset: #eceef180;
+  --color-border: #dde1e6;
+  --color-border-strong: #c5cad2;
+
+  --color-text-primary: #1a1d24;
+  --color-text-secondary: #565d68;
+  --color-text-tertiary: #8790a0;
+  --color-text-inverse: #ffffff;
+
+  --color-accent: #3b6ff0;
+  --color-accent-hover: #2c5ce0;
+  --color-accent-muted: #e2eaff;
+
+  --color-success: #23945f;
+  --color-warning: #a9791a;
+  --color-danger: #c8433f;
+
+  --color-status-todo: #8790a0;
+  --color-status-in-progress: #3b6ff0;
+  --color-status-validated: #23945f;
+  --color-status-flagged: #c8433f;
+
+  --canvas-checker: #e4e6ea;
+  --shadow-elevated: 0 8px 24px rgba(20, 22, 28, 0.12);
+}

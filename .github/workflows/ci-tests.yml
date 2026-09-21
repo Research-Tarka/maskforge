@@ -1,0 +1,86 @@
+name: CI Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  sidecar-tests:
+    name: Sidecar (Python) tests
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: sidecar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run tests
+        run: pytest tests/ -v --benchmark-disable
+      - name: Run benchmarks (non-blocking)
+        run: pytest tests/ -v -k benchmark --benchmark-only --benchmark-json=benchmark.json
+        continue-on-error: true
+
+  frontend-tests:
+    name: Frontend (TypeScript) checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Build
+        run: npm run build
+      - name: Lint
+        run: npm run lint --if-present
+
+  rust-checks:
+    name: Tauri shell (Rust) checks
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Stub external sidecar binary
+        # tauri.conf.json's bundle.externalBin requires this file to exist
+        # even for `cargo check`/`cargo test` (no bundling happens here) —
+        # the real PyInstaller-built binary is only produced by the release
+        # build workflow. An empty placeholder satisfies the existence
+        # check without needing a real sidecar build in CI.
+        shell: bash
+        run: |
+          mkdir -p binaries
+          touch binaries/maskforge-sidecar-x86_64-pc-windows-msvc.exe
+      - name: Check
+        run: cargo check --locked
+      - name: Test
+        run: cargo test --locked
+
+  ipc-contract-check:
+    name: IPC contract version sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare IPC_CONTRACT_VERSION between sidecar and frontend
+        shell: bash
+        run: |
+          PY_VERSION=$(grep -oP 'IPC_CONTRACT_VERSION\s*=\s*"\K[^"]+' sidecar/api/schemas.py)
+          TS_VERSION=$(grep -oP 'IPC_CONTRACT_VERSION\s*=\s*"\K[^"]+' src/types/api.ts)
+          echo "sidecar: $PY_VERSION / frontend: $TS_VERSION"
+          if [ "$PY_VERSION" != "$TS_VERSION" ]; then
+            echo "IPC contract version mismatch between sidecar and frontend"
+            exit 1
+          fi

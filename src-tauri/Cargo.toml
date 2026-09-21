@@ -1,0 +1,28 @@
+[package]
+name = "maskforge"
+version = "1.0.0"
+description = "MaskForge — standalone raster mask annotation/correction desktop app"
+authors = ["Maxime Tarka"]
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-http = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+
+[features]
+# This feature is used for production builds or when a dev server is not
+# specified, DO NOT REMOVE
+custom-protocol = ["tauri/custom-protocol"]
+# Diagnostic-only: opens devtools at startup even in a release build, so a
+# production install can be inspected without a dev environment. Not
+# enabled by default — pass --features devtools to cargo/tauri build.
+devtools = ["tauri/devtools"]
