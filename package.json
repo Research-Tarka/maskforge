@@ -1,7 +1,7 @@
 {
   "name": "maskforge",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "Standalone raster mask annotation and correction desktop app.",
   "scripts": {

@@ -1,6 +1,6 @@
 [package]
 name = "maskforge"
-version = "1.0.0"
+version = "1.0.1"
 description = "MaskForge — standalone raster mask annotation/correction desktop app"
 authors = ["Maxime Tarka"]
 edition = "2021"
