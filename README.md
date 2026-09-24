@@ -1,5 +1,7 @@
 # MaskForge
 
+![MaskForge](assets/maskforge_1.png)
+
 A standalone desktop application for annotating and correcting raster segmentation masks on any imagery — satellite, aerial, or plain photographs, georeferenced or not.
 
 MaskForge offers configurable scene discovery instead of a hardcoded folder convention, persisted and shareable class palettes instead of hardcoded classes, vectorized painting tools, arbitrary-factor resampling, and a single installer with no separate Python/runtime setup required.
