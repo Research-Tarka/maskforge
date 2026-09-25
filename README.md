@@ -10,9 +10,10 @@ MaskForge offers configurable scene discovery instead of a hardcoded folder conv
 
 - **Configurable scene discovery** — point at a source root and describe your folder/file naming with glob patterns; no fixed directory convention.
 - **Zarr support** — read scenes directly out of per-tile `.zarr` stores (in addition to GeoTIFF/PNG), via a pluggable raster-format registry.
-- **Multi-panel synchronized editor** — view raw imagery, a shadow/contrast layer, and the mask side by side (1–4 panels), pan/zoom locked together.
+- **Multi-panel synchronized editor** — view any combination of a scene's RGB composite views (true color, shadow/contrast, natural color, color infrared, or any other detected view) alongside the mask, side by side (1–4 panels), pan/zoom locked together, with per-layer visibility and ordering.
 - **Class palettes** — define classes with names, colors, and values; save palettes for reuse; activate a subset per session.
-- **Painting tools** — brush, bucket fill, polygon, and an image-guided auto-fill, all vectorized for large images.
+- **Painting tools** — brush, bucket fill, polygon, and an image-guided auto-fill, all vectorized for large images and rendered through in-place canvas patching for fast, responsive annotation even on large masks.
+- **Auto-segment on any combination of views** — cluster on any checked subset of a scene's RGB views (stacked band-wise), not just a fixed raw/shadow/both choice, giving the clustering more information to separate visually similar colors.
 - **Color picker with safe remapping** — pick colors in HSV/RGB/HEX; remapping an already-used color previews the affected pixel count before applying.
 - **Border contours** — thin, non-dilated class boundaries rendered live, cached incrementally.
 - **Flexible export** — GeoTIFF (RGBA/RGB) or PNG, custom output folder structure, optional resampling (native, or arbitrary target resolution with nearest or majority/"mode" categorical downsampling).

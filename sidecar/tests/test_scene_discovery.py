@@ -154,12 +154,24 @@ def zarr_tile_store(tmp_path: Path):
         chunks=(1, 3, height, width),
     )
     grp.create_dataset(
-        "rgb_raw",
+        "rgb_true_color",
         data=rng.integers(0, 255, size=(2, 3, height, width), dtype=np.uint8),
         chunks=(1, 3, height, width),
     )
     grp.create_dataset(
-        "rgb_shadow",
+        "rgb_true_color_shadow",
+        data=rng.integers(0, 255, size=(2, 3, height, width), dtype=np.uint8),
+        chunks=(1, 3, height, width),
+    )
+    grp.create_dataset(
+        "rgb_natural_color",
+        data=rng.integers(0, 255, size=(2, 3, height, width), dtype=np.uint8),
+        chunks=(1, 3, height, width),
+    )
+    # An unrecognized-but-rgb-prefixed name -- proves detection is a generic
+    # "rgb*" prefix check, not a closed list of the four known names.
+    grp.create_dataset(
+        "rgb_custom_view",
         data=rng.integers(0, 255, size=(2, 3, height, width), dtype=np.uint8),
         chunks=(1, 3, height, width),
     )
@@ -207,7 +219,22 @@ class TestDiscoverScenesWithZarrStores:
         assert parsed_store == store_path
         assert sensor == "l8"
         assert scene_ref == scene_ids[0]
-        assert view == "rgb_raw"
+        assert view == "rgb_true_color"
+
+        # rgb_natural_color and rgb_custom_view (an unrecognized-but-rgb*
+        # name) are present in the fixture, rgb_color_infrared is not --
+        # rgb_composites must reflect exactly what the store has, detected
+        # generically (not limited to the four well-known names).
+        assert set(entry.rgb_composites) == {
+            "rgb_true_color",
+            "rgb_true_color_shadow",
+            "rgb_natural_color",
+            "rgb_custom_view",
+        }
+        _, _, _, extra_view = parse_composite_path(entry.rgb_composites["rgb_natural_color"])
+        assert extra_view == "rgb_natural_color"
+        _, _, _, custom_view = parse_composite_path(entry.rgb_composites["rgb_custom_view"])
+        assert custom_view == "rgb_custom_view"
 
     def test_zarr_store_not_recursed_into(self, zarr_tile_store):
         # The internal .zarr/l8/toa/... chunk directories must never be

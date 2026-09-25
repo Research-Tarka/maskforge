@@ -190,7 +190,7 @@ export default function ToolPanel() {
             id="brush-size"
             type="range"
             min={1}
-            max={400}
+            max={50}
             value={brushSize}
             onChange={(e) => setBrushSize(Number(e.target.value))}
           />

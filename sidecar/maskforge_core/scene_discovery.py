@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from .plugins.zarr_reader import make_composite_path
+from .plugins.zarr_reader import is_rgb_composite_name, make_composite_path
 
 SceneMode = Literal["annotate", "review"]
 QaStatus = Literal["todo", "in_progress", "validated", "flagged"]
@@ -99,6 +99,17 @@ class SceneEntry:
     detected_crs: str | None
     mode: SceneMode
     qa_status: QaStatus = "todo"
+    #: Every RGB composite view this scene has, ``{view_name: composite_path}``
+    #: (e.g. ``rgb_true_color``, ``rgb_natural_color``, ``rgb_color_infrared``,
+    #: or any other ``rgb*`` array a store happens to have -- see
+    #: ``plugins.zarr_reader.is_rgb_composite_name``). Only ever populated by
+    #: a zarr-store scan (``_scan_zarr_store``); a plain-file scan rule only
+    #: ever finds a single raw + a single shadow file, so it populates
+    #: ``raw_path``/``shadow_path`` directly and leaves this dict empty.
+    #: ``raw_path``/``shadow_path`` are kept as convenience aliases for the
+    #: two most common views (``rgb_true_color``/``rgb_true_color_shadow``)
+    #: so existing callers that only care about those two keep working.
+    rgb_composites: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -110,6 +121,7 @@ class SceneEntry:
             "detected_crs": self.detected_crs,
             "mode": self.mode,
             "qa_status": self.qa_status,
+            "rgb_composites": self.rgb_composites,
         }
 
 
@@ -229,21 +241,34 @@ def _scan_zarr_store(store_path: Path, rule: ScanRule, exclude_globs: list[str])
         if transform and len(transform) >= 6:
             detected_resolution = (math.hypot(transform[0], transform[1]), math.hypot(transform[3], transform[4]))
 
+        # Every RGB composite array this sensor group actually has -- a store
+        # only ever has the views that were enabled at scene-storage time
+        # (see landscape_change_detection_pipeline's
+        # config.py::RgbCompositesConfig), and may include names beyond the
+        # pipeline's current four (is_rgb_composite_name is a prefix check,
+        # not a closed list), so a future added view is picked up here too.
+        all_arrays = set(grp.array_keys()) if hasattr(grp, "array_keys") else set(grp.keys())
+        available_composites = {name for name in all_arrays if is_rgb_composite_name(name)}
+
         for scene_id in scene_ids:
             entry_id = f"{store_stem}_{sensor}_{scene_id}"
             if _is_excluded(Path(entry_id), exclude_globs):
                 continue
-            raw_path = make_composite_path(store_path, sensor, scene_id, "rgb_raw")
-            shadow_path = make_composite_path(store_path, sensor, scene_id, "rgb_shadow")
+
+            rgb_composites = {
+                view: make_composite_path(store_path, sensor, scene_id, view) for view in available_composites
+            }
+
             entries.append(
                 SceneEntry(
                     id=entry_id,
-                    raw_path=raw_path,
-                    shadow_path=shadow_path,
+                    raw_path=rgb_composites.get("rgb_true_color"),
+                    shadow_path=rgb_composites.get("rgb_true_color_shadow"),
                     mask_path=None,
                     detected_resolution=detected_resolution,
                     detected_crs=crs_wkt,
                     mode="annotate",
+                    rgb_composites=rgb_composites,
                 )
             )
 

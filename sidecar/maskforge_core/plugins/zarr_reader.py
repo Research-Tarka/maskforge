@@ -12,7 +12,14 @@ form::
 
 ``composite`` selects what to display for that scene:
 
-- ``rgb_raw`` / ``rgb_shadow`` -- the pre-computed 3-band uint8 composites.
+- Any pre-computed 3-band uint8 composite array name stored directly in the
+  sensor group -- typically one of ``rgb_true_color`` / ``rgb_true_color_shadow``
+  / ``rgb_natural_color`` / ``rgb_color_infrared`` (the pipeline's current
+  names, see ``landscape_change_detection_pipeline/scenes/composites.py``),
+  but any array name starting with ``rgb`` (case-insensitive) is recognized,
+  and any other array name a store happens to have can still be read
+  directly. Not every store has every composite -- see
+  :func:`list_composites_for_sensor`.
 - ``toa:<band1>,<band2>,<band3>`` -- an arbitrary band combination pulled out
   of the group's ``toa`` array, using the names in its ``band_names`` attr
   (order given is the output channel order, so e.g. ``toa:B4,B3,B2`` makes a
@@ -33,12 +40,36 @@ in-store address.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 _SEP = "!"
+
+# Cache of opened zarr groups, keyed by store path -- re-running
+# zarr.open_group() re-parses every group's .zattrs/.zarray metadata from
+# disk on every call, which is wasted work when a scene's 1-4 RGB composite
+# views are all read moments apart (once per GET /scenes/{id}/layers call,
+# itself hit on every brush stamp mid-drag). A short TTL (rather than an
+# unbounded cache) lets an external change to the store surface within a
+# few seconds instead of requiring a sidecar restart.
+_GROUP_CACHE_TTL_S = 5.0
+_group_cache: dict[str, tuple[float, Any]] = {}
+
+
+def _open_group_cached(store_path: Path):
+    import zarr
+
+    key = str(store_path)
+    now = time.monotonic()
+    cached = _group_cache.get(key)
+    if cached is not None and (now - cached[0]) < _GROUP_CACHE_TTL_S:
+        return cached[1]
+    group = zarr.open_group(key, mode="r")
+    _group_cache[key] = (now, group)
+    return group
 
 
 class ZarrAddressError(ValueError):
@@ -111,14 +142,53 @@ def _resolve_scene_index(scene_ref: str, scene_ids: list[str]) -> int:
         ) from None
 
 
-def list_composites_for_sensor(band_names: list[str]) -> list[str]:
-    """The fixed composite choices plus a natural-color band combo, if available.
+#: Preferred display order for the composite names the pipeline currently
+#: produces (see ``landscape_change_detection_pipeline/scenes/composites.py``'s
+#: ``VIEW_BAND_LABELS`` keys). This is no longer the full set of recognized
+#: names -- :func:`is_rgb_composite_name`/:func:`list_composites_for_sensor`
+#: accept *any* ``rgb*`` array name a store happens to have, so a future
+#: composite the pipeline adds shows up automatically without an edit here.
+#: This tuple only controls the order familiar composites are listed in.
+KNOWN_RGB_COMPOSITES: tuple[str, ...] = (
+    "rgb_true_color",
+    "rgb_true_color_shadow",
+    "rgb_natural_color",
+    "rgb_color_infrared",
+)
 
-    Convenience for callers building a UI selector; the reader itself accepts
-    any ``toa:<band>,<band>,...`` combination whose bands exist in
-    ``band_names``, not only the ones this returns.
+_KNOWN_ORDER = {name: i for i, name in enumerate(KNOWN_RGB_COMPOSITES)}
+
+
+def is_rgb_composite_name(name: str) -> bool:
+    """Whether an array name looks like an RGB composite view.
+
+    Deliberately a simple case-insensitive ``rgb*`` prefix check rather than
+    a closed list -- the storage pipeline may add new composite views (e.g.
+    a future ``rgb_swir_composite``) without this reader needing an update
+    to recognize them.
     """
-    composites = ["rgb_raw", "rgb_shadow"]
+    return name.lower().startswith("rgb")
+
+
+def list_composites_for_sensor(band_names: list[str], available: set[str] | None = None) -> list[str]:
+    """The composite choices actually available for one sensor group, plus a
+    natural-color band combo fallback if ``band_names`` is given.
+
+    ``available`` (typically a zarr group's own array names) is filtered down
+    to whatever looks like an RGB composite (:func:`is_rgb_composite_name`);
+    when omitted, only the well-known names are offered (there being no store
+    to inspect for extra ones). Known names sort first in their preferred
+    order (see :data:`KNOWN_RGB_COMPOSITES`), any other ``rgb*`` name found in
+    ``available`` is appended alphabetically after them. Convenience for
+    callers building a UI selector; the reader itself accepts any array name
+    present in the group, or any ``toa:<band>,<band>,...`` combination whose
+    bands exist in ``band_names``, not only the ones this returns.
+    """
+    if available is None:
+        composites = list(KNOWN_RGB_COMPOSITES)
+    else:
+        found = [name for name in available if is_rgb_composite_name(name)]
+        composites = sorted(found, key=lambda n: (_KNOWN_ORDER.get(n, len(_KNOWN_ORDER)), n))
     if band_names:
         composites.append("toa:" + ",".join(band_names[: min(3, len(band_names))]))
     return composites
@@ -131,13 +201,11 @@ class ZarrRasterReader:
         return is_zarr_composite_path(path)
 
     def read(self, path: Path) -> tuple[np.ndarray, dict[str, Any]]:
-        import zarr
-
         store_path, sensor, scene_ref, composite = parse_composite_path(path)
         if not store_path.exists():
             raise FileNotFoundError(f"Zarr store not found: {store_path}")
 
-        store = zarr.open_group(str(store_path), mode="r")
+        store = _open_group_cached(store_path)
         if sensor not in store:
             raise KeyError(f"No '{sensor}' group in {store_path}")
         grp = store[sensor]
@@ -146,11 +214,7 @@ class ZarrRasterReader:
         scene_ids = list(attrs.get("scene_ids", []))
         idx = _resolve_scene_index(scene_ref, scene_ids)
 
-        if composite == "rgb_raw":
-            arr = np.asarray(grp["rgb_raw"][idx])  # (3, H, W)
-        elif composite == "rgb_shadow":
-            arr = np.asarray(grp["rgb_shadow"][idx])  # (3, H, W)
-        elif composite.startswith("toa:"):
+        if composite.startswith("toa:"):
             band_names = list(attrs.get("band_names", []))
             requested = [b for b in composite[len("toa:") :].split(",") if b]
             if not requested:
@@ -161,8 +225,14 @@ class ZarrRasterReader:
             band_idx = [band_names.index(b) for b in requested]
             toa = grp["toa"][idx]  # (C, H, W) uint16
             arr = np.asarray(toa)[band_idx, ...]
+        elif composite in grp:
+            arr = np.asarray(grp[composite][idx])  # (3, H, W)
         else:
-            raise ZarrAddressError(f"Unknown composite {composite!r} (expected rgb_raw, rgb_shadow, or toa:<bands>)")
+            raise ZarrAddressError(
+                f"Unknown composite {composite!r}: not an array in this sensor group "
+                f"(available: {sorted(set(grp.array_keys()) if hasattr(grp, 'array_keys') else set(grp.keys()))}) "
+                "and not a 'toa:<bands>' combination."
+            )
 
         arr = np.moveaxis(arr, 0, -1)  # (H, W, C)
         if arr.shape[-1] == 1:

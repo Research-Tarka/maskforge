@@ -44,17 +44,18 @@ class MaskBuffer:
     # bookkeeping complexity of a bbox-diff history for that little memory.
     undo_stack: list[np.ndarray] = field(default_factory=list)
     redo_stack: list[np.ndarray] = field(default_factory=list)
-    # Cached LayerData for the raw/shadow source imagery, keyed by their
-    # source path -- these never change while a scene is being annotated
-    # (only the mask does), but GET /scenes/{id}/layers used to re-read and
-    # re-PNG-encode them from disk/zarr on every single call, including
-    # every brush stamp mid-drag. On a zarr-backed scene (e.g. Sentinel-2,
-    # which decompresses a bigger chunk than a plain GeoTIFF) that made
-    # painting visibly laggy. Cached per-path (not unconditionally) so a
-    # scene whose raw/shadow path is later reassigned still gets a fresh
-    # read rather than serving stale data forever.
-    raw_layer_cache: tuple[str, Any] | None = None
-    shadow_layer_cache: tuple[str, Any] | None = None
+    # Cached LayerData for each RGB composite view, keyed by view name (e.g.
+    # "rgb_true_color") -> (source_path, LayerData) -- these never change
+    # while a scene is being annotated (only the mask does), but GET
+    # /scenes/{id}/layers used to re-read and re-PNG-encode them from
+    # disk/zarr on every single call, including every brush stamp mid-drag.
+    # On a zarr-backed scene (e.g. Sentinel-2, which decompresses a bigger
+    # chunk than a plain GeoTIFF) that made painting visibly laggy. Cached
+    # per-path (not unconditionally) so a view whose source path is later
+    # reassigned still gets a fresh read rather than serving stale data
+    # forever. A dict (not two fixed fields) since a scene can now have up
+    # to 4 (or more) RGB views instead of a fixed raw/shadow pair.
+    rgb_layer_cache: dict[str, tuple[str, Any]] = field(default_factory=dict)
 
     def push_undo_snapshot(self) -> None:
         """Call BEFORE mutating self.classes, to snapshot the pre-edit

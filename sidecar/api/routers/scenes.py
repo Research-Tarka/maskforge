@@ -43,6 +43,7 @@ def _to_schema_entry(e: CoreSceneEntry) -> SceneEntry:
         detected_crs=e.detected_crs,
         mode=e.mode,
         qa_status=e.qa_status,
+        rgb_composites=e.rgb_composites,
     )
 
 
@@ -101,7 +102,7 @@ def _layer_from_path(path_str: str | None) -> LayerData | None:
 
 def _cached_layer_from_path(path_str: str | None, cache: tuple[str, LayerData] | None) -> tuple[LayerData | None, tuple[str, LayerData] | None]:
     """Like _layer_from_path, but reuses `cache` when it was built from the
-    same path -- raw/shadow imagery never changes while a scene is being
+    same path -- RGB composite imagery never changes while a scene is being
     annotated (only the mask does), yet GET /layers is called on every
     single brush stamp mid-drag. Re-reading and re-PNG-encoding a
     zarr-backed scene (e.g. Sentinel-2, whose chunks are bigger to
@@ -147,7 +148,16 @@ def _layer_from_mask_buffer(buf: MaskBuffer) -> LayerData:
 
 
 @router.get("/{scene_id}/layers", response_model=LayersResponse)
-def get_layers(scene_id: str) -> LayersResponse:
+def get_layers(scene_id: str, views: str = "") -> LayersResponse:
+    """``views`` is an optional comma-separated list of RGB composite view
+    names (e.g. ``"rgb_true_color,rgb_natural_color"``) to decode -- when
+    omitted, every view the scene has is decoded (the old behaviour). Only
+    decoding what's actually visible in a canvas slot (see the frontend's
+    layout panel) avoids paying for up to 4 composite decodes on every call
+    when only 1-2 are ever shown on screen -- this endpoint is hit on every
+    brush stamp mid-drag, not just once per scene open, so the saving is
+    per-stroke, not just per scene load.
+    """
     state = get_state()
     scene = state.get_scene(scene_id)
     if scene is None:
@@ -165,16 +175,31 @@ def get_layers(scene_id: str) -> LayersResponse:
     # "No mask yet" until the first stroke happens to succeed.
     mask_layer = _layer_from_path(scene.mask_path) or _layer_from_mask_buffer(buf)
 
-    # raw/shadow are cached on the buffer (see MaskBuffer.raw_layer_cache) --
-    # they never change while this scene is open, only the mask does, so
-    # this skips a full re-read + re-encode on every single call (this
-    # endpoint is hit on every brush stamp mid-drag, not just once per
-    # scene open).
-    raw_layer, buf.raw_layer_cache = _cached_layer_from_path(scene.raw_path, buf.raw_layer_cache)
-    shadow_layer, buf.shadow_layer_cache = _cached_layer_from_path(scene.shadow_path, buf.shadow_layer_cache)
+    # A scene discovered outside the zarr path (plain raw/shadow files) has
+    # no rgb_composites entries -- fall back to its raw_path/shadow_path
+    # under their conventional view names so it still renders 1-2 panels.
+    all_composites = dict(scene.rgb_composites)
+    if not all_composites:
+        if scene.raw_path:
+            all_composites["rgb_true_color"] = scene.raw_path
+        if scene.shadow_path:
+            all_composites["rgb_true_color_shadow"] = scene.shadow_path
+
+    requested = {v for v in views.split(",") if v} or set(all_composites)
+
+    # Each view is cached on the buffer (see MaskBuffer.rgb_layer_cache) --
+    # composite imagery never changes while this scene is open, only the
+    # mask does, so this skips a full re-read + re-encode on every single
+    # call for a view that was already decoded once.
+    rgb_layers: dict[str, LayerData] = {}
+    for view, path_str in all_composites.items():
+        if view not in requested:
+            continue
+        layer, buf.rgb_layer_cache[view] = _cached_layer_from_path(path_str, buf.rgb_layer_cache.get(view))
+        if layer is not None:
+            rgb_layers[view] = layer
 
     return LayersResponse(
-        raw=raw_layer,
-        shadow=shadow_layer,
+        rgb=rgb_layers,
         mask=mask_layer,
     )

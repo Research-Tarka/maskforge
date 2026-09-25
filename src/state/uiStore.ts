@@ -35,7 +35,8 @@ export type KeybindingAction =
   | "panel.toggleQa"
   | "panel.toggleStats"
   | "panel.toggleKeybindings"
-  | "panel.toggleAutoSegment";
+  | "panel.toggleAutoSegment"
+  | "panel.toggleLayout";
 
 export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   "tool.brush": "&",
@@ -62,6 +63,7 @@ export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   "panel.toggleStats": "8",
   "panel.toggleKeybindings": "9",
   "panel.toggleAutoSegment": "0",
+  "panel.toggleLayout": "L",
 };
 
 export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
@@ -89,6 +91,7 @@ export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   "panel.toggleStats": "Toggle stats panel",
   "panel.toggleKeybindings": "Toggle keybindings panel",
   "panel.toggleAutoSegment": "Toggle auto-segment panel",
+  "panel.toggleLayout": "Toggle layout panel",
 };
 
 export type PanelId =
@@ -101,7 +104,8 @@ export type PanelId =
   | "qa"
   | "stats"
   | "keybindings"
-  | "autoSegment";
+  | "autoSegment"
+  | "layout";
 
 const DEFAULT_PANEL_VISIBILITY: Record<PanelId, boolean> = {
   tools: true,
@@ -114,6 +118,7 @@ const DEFAULT_PANEL_VISIBILITY: Record<PanelId, boolean> = {
   stats: false,
   keybindings: false,
   autoSegment: false,
+  layout: false,
 };
 
 const THEME_STORAGE_KEY = "maskforge.theme";

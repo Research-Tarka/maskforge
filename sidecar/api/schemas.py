@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-IPC_CONTRACT_VERSION = "1.0.0"
+IPC_CONTRACT_VERSION = "1.1.0"
 
 
 # ===========================================================================
@@ -47,6 +47,11 @@ class SceneEntry(BaseModel):
     detected_crs: str | None = None
     mode: Literal["annotate", "review"] = "annotate"
     qa_status: Literal["todo", "in_progress", "validated", "flagged"] = "todo"
+    # Every RGB composite view this scene has, {view_name: composite_path} --
+    # see maskforge_core.scene_discovery.SceneEntry.rgb_composites. Only ever
+    # populated for a zarr-store scene; empty for a plain-file scene (where
+    # raw_path/shadow_path are the only two views that can ever exist).
+    rgb_composites: dict[str, str] = Field(default_factory=dict)
 
 
 class ScanRule(BaseModel):
@@ -121,8 +126,13 @@ class LayerData(BaseModel):
 
 
 class LayersResponse(BaseModel):
-    raw: LayerData | None = None
-    shadow: LayerData | None = None
+    # Every RGB composite view currently rendered for this scene, keyed by
+    # view name (e.g. "rgb_true_color") -- replaces the old fixed raw/shadow
+    # pair now that a scene can have up to 4 (or more) RGB visuals. Only the
+    # views requested via GET /scenes/{id}/layers?views=... are populated
+    # (see scenes.py:get_layers) to avoid decoding/encoding every composite
+    # on every call when only some are actually shown on screen.
+    rgb: dict[str, LayerData] = Field(default_factory=dict)
     mask: LayerData | None = None
 
 
@@ -147,7 +157,12 @@ class ToolResponse(BaseModel):
 class AutoSegmentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    source: Literal["raw", "shadow", "both"] = "raw"
+    # Which RGB composite view(s) to cluster on, by name (e.g.
+    # ["rgb_true_color", "rgb_color_infrared"]) -- checked in the frontend's
+    # auto-segment panel. Multiple sources are stacked band-wise before
+    # clustering (see masks.py::_load_auto_segment_sources), giving the
+    # clustering more information than any single view alone.
+    sources: list[str] = Field(min_length=1)
     n_clusters: int = 4
     method: Literal["kmeans", "gmm"] = "kmeans"
     use_texture: bool = True

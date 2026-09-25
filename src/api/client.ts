@@ -288,8 +288,13 @@ export function discoverScenes(config: DiscoveryConfig): Promise<SceneEntry[]> {
   return post<SceneEntry[]>("/scenes/discover", config);
 }
 
-export function getSceneLayers(sceneId: string): Promise<SceneLayers> {
-  return get<SceneLayers>(`/scenes/${encodeURIComponent(sceneId)}/layers`);
+/** `views` restricts which RGB composite views get decoded/encoded
+ * server-side (see scenes.py:get_layers) -- pass the set of view names
+ * currently visible in a canvas slot to avoid paying for composites the
+ * layout panel has hidden. Omit to fetch every view the scene has. */
+export function getSceneLayers(sceneId: string, views?: string[]): Promise<SceneLayers> {
+  const query = views && views.length > 0 ? `?views=${encodeURIComponent(views.join(","))}` : "";
+  return get<SceneLayers>(`/scenes/${encodeURIComponent(sceneId)}/layers${query}`);
 }
 
 // ---------------------------------------------------------------------------

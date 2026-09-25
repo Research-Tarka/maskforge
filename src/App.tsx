@@ -21,11 +21,13 @@ import QAPanel from "@/components/panels/QAPanel";
 import StatsPanel from "@/components/panels/StatsPanel";
 import KeybindingsPanel from "@/components/panels/KeybindingsPanel";
 import AutoSegmentPanel from "@/components/panels/AutoSegmentPanel";
+import LayoutPanel from "@/components/panels/LayoutPanel";
 import { useUiStore } from "@/state/uiStore";
 import { useSessionStore } from "@/state/sessionStore";
 import { useClassStore } from "@/state/classStore";
 import { useViewportStore } from "@/state/viewportStore";
 import { useToolStore } from "@/state/toolStore";
+import { useLayoutStore, layerLabel, rgbKeysForScene, visibleOrderedLayerKeys, MASK_KEY } from "@/state/layoutStore";
 import { getPalettes, getScenes, getSceneLayers, getSessions, undoMask, redoMask } from "@/api/client";
 import type { SceneLayers } from "@/types/api";
 import "@/styles/app.css";
@@ -68,12 +70,37 @@ export default function App() {
   const [bootError, setBootError] = useState<string | null>(null);
   const [booted, setBooted] = useState(false);
 
-  const panelCount = 3; // Raw / Mask / Shadow
-  const totalGap = CANVAS_GAP_PX * (panelCount - 1);
-  const usableWidth = Math.max(0, canvasAreaSize.width - totalGap);
-  const evenWidth = Math.max(MIN_PANEL_SIZE, Math.floor(usableWidth / panelCount));
-  const panelWidths = [evenWidth, evenWidth, evenWidth];
-  const panelHeight = Math.max(MIN_PANEL_SIZE, Math.floor(canvasAreaSize.height));
+  // Select the raw visibility/order maps (not the store's visibleOrderedKeys
+  // function) so this component actually re-renders when they change --
+  // Zustand only re-renders on a changed *selected value*, and a function
+  // reference pulled off the store never changes identity, so selecting the
+  // function itself made toggling/reordering in the Layout panel silently
+  // no-op here until some unrelated state change (e.g. a paint stroke) forced
+  // a re-render for its own reasons and picked up the new layout as a side
+  // effect.
+  const layoutVisibility = useLayoutStore((s) => s.visibility);
+  const layoutOrder = useLayoutStore((s) => s.order);
+  const availableLayerKeys = activeScene ? [...rgbKeysForScene(activeScene), MASK_KEY] : [];
+  const visibleLayerKeys = visibleOrderedLayerKeys(availableLayerKeys, layoutVisibility, layoutOrder);
+  const panels = visibleLayerKeys.map((kind) => ({ kind, label: layerLabel(kind) }));
+
+  // Panels are arranged in a near-square matrix rather than a single row --
+  // a single row of 4-5 RGB+mask panels squeezed each one down to a sliver.
+  // columns = ceil(sqrt(n)) keeps rows*cols close to n while favoring more
+  // columns than rows for a typical wide canvas area (e.g. 5 -> 3x2 grid,
+  // 4 -> 2x2, 3 -> 2x2 with one empty cell, 2 -> 2x1, 1 -> 1x1).
+  const panelCount = Math.max(1, panels.length);
+  const columns = Math.max(1, Math.ceil(Math.sqrt(panelCount)));
+  const rows = Math.max(1, Math.ceil(panelCount / columns));
+
+  const totalGapX = CANVAS_GAP_PX * (columns - 1);
+  const totalGapY = CANVAS_GAP_PX * (rows - 1);
+  const usableWidth = Math.max(0, canvasAreaSize.width - totalGapX);
+  const usableHeight = Math.max(0, canvasAreaSize.height - totalGapY);
+  const evenWidth = Math.max(MIN_PANEL_SIZE, Math.floor(usableWidth / columns));
+  const evenHeight = Math.max(MIN_PANEL_SIZE, Math.floor(usableHeight / rows));
+  const panelWidths = panels.map(() => evenWidth);
+  const panelHeight = evenHeight;
 
   // Bootstrap: load palettes + most recent session (if any) on first mount.
   useEffect(() => {
@@ -137,14 +164,22 @@ export default function App() {
     return () => observer.disconnect();
   }, []);
 
-  // Load layers whenever the active scene changes.
+  // Load layers whenever the active scene (or its visible RGB views) change.
+  // Only the RGB views currently visible in a canvas slot are requested --
+  // decoding/encoding a composite the layout panel has hidden would be
+  // wasted work, and this is the endpoint hit on every brush stamp mid-drag,
+  // so the saving compounds. A brief extra fetch when the user reveals a
+  // previously-hidden view is an acceptable trade for not paying for it on
+  // every single stroke while it stays hidden.
+  const visibleRgbKeys = visibleLayerKeys.filter((k) => k !== MASK_KEY);
+  const visibleRgbKeysKey = visibleRgbKeys.join(",");
   useEffect(() => {
     if (!activeScene) {
       setSceneLayers(null);
       return;
     }
     let cancelled = false;
-    getSceneLayers(activeScene.id)
+    getSceneLayers(activeScene.id, visibleRgbKeys)
       .then((layers) => {
         if (!cancelled) setSceneLayers(layers);
       })
@@ -154,7 +189,8 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeScene, sceneRefreshToken]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeScene, sceneRefreshToken, visibleRgbKeysKey]);
 
   // Fit the viewport to the loaded scene's real pixel size, once both the
   // image dimensions and the panel's measured on-screen size are known.
@@ -171,8 +207,9 @@ export default function App() {
   // object) -- sceneLayers gets a new object identity after every paint
   // stroke (handleMaskUpdated refetches it), and re-fitting on every one of
   // those reset the user's zoom/pan mid-annotation.
-  const contentWidth = sceneLayers?.raw?.width ?? sceneLayers?.mask?.width ?? 0;
-  const contentHeight = sceneLayers?.raw?.height ?? sceneLayers?.mask?.height ?? 0;
+  const firstRgbLayer = visibleRgbKeys.length > 0 ? sceneLayers?.rgb[visibleRgbKeys[0]] : undefined;
+  const contentWidth = firstRgbLayer?.width ?? sceneLayers?.mask?.width ?? 0;
+  const contentHeight = firstRgbLayer?.height ?? sceneLayers?.mask?.height ?? 0;
   useEffect(() => {
     if (contentWidth <= 0 || contentHeight <= 0) return;
     if (panelWidths[0] <= 0 || panelHeight <= 0) return;
@@ -229,6 +266,7 @@ export default function App() {
       if (chord === keybindings["panel.toggleStats"]) return togglePanel("stats");
       if (chord === keybindings["panel.toggleKeybindings"]) return togglePanel("keybindings");
       if (chord === keybindings["panel.toggleAutoSegment"]) return togglePanel("autoSegment");
+      if (chord === keybindings["panel.toggleLayout"]) return togglePanel("layout");
 
       if (chord === keybindings["action.undo"]) {
         e.preventDefault();
@@ -269,34 +307,24 @@ export default function App() {
     setLastUsedTool,
   ]);
 
-  const handleMaskUpdated = (pngBase64: string, bbox: [number, number, number, number]) => {
-    // /tool's response only carries the PNG for the changed bbox region
-    // (a small crop, not the full-scene layer) -- it exists for a future
-    // incremental-redraw optimization, but naively assigning it as the
-    // whole mask's png_base64 would replace the entire layer image with
-    // that tiny cropped stamp (rendered stretched to fill the panel,
-    // looking like the mask turned solid black). Always refetch the full
-    // layer set instead until partial redraw is actually implemented.
-    void pngBase64;
-    void bbox;
-    if (!activeScene) return;
-    getSceneLayers(activeScene.id)
-      .then((layers) => setSceneLayers(layers))
-      .catch(() => {});
-    // Every paint/polygon/tool edit lands here, and already fetches its own
-    // fresh layers above -- bump statsRefreshToken only (not
-    // sceneRefreshToken, which would trigger a second, redundant
-    // getSceneLayers call on every single paint stamp and was the main
-    // source of per-stroke paint latency). StatsPanel's per-class pixel
-    // counts key off statsRefreshToken so they still recompute here.
-    bumpStatsRefreshToken();
+  // MultiPanelCanvas patches the mask canvas directly from each /tool
+  // response's small bbox crop (see maskCanvas.ts) for instant visual
+  // feedback -- this is only called once per one-off edit (bucket/polygon/
+  // autofill/component-assign) or once at the end of a brush drag (not once
+  // per stamp), to resync sceneLayers.mask with the server for the undo-diff
+  // snapshot, contour/diff overlays, and stats, none of which read the
+  // patched canvas directly.
+  const handleStrokeEnd = async () => {
+    if (!activeScene) return null;
+    try {
+      const layers = await getSceneLayers(activeScene.id, visibleRgbKeys);
+      setSceneLayers(layers);
+      bumpStatsRefreshToken();
+      return layers;
+    } catch {
+      return null;
+    }
   };
-
-  const panels = [
-    { kind: "raw" as const, label: "Raw" },
-    { kind: "mask" as const, label: "Mask" },
-    { kind: "shadow" as const, label: "Shadow" },
-  ];
 
   return (
     <div className="app-shell">
@@ -329,9 +357,10 @@ export default function App() {
               panels={panels}
               panelWidths={panelWidths}
               panelHeight={panelHeight}
+              columns={columns}
               showContours={showContours}
               showDiff={showDiff && activeScene.mode === "review"}
-              onMaskUpdated={handleMaskUpdated}
+              onStrokeEnd={handleStrokeEnd}
             />
           )}
         </div>
@@ -348,6 +377,7 @@ export default function App() {
           {panelVisibility.stats && <StatsPanel />}
           {panelVisibility.keybindings && <KeybindingsPanel />}
           {panelVisibility.autoSegment && <AutoSegmentPanel />}
+          {panelVisibility.layout && <LayoutPanel />}
         </aside>
       </div>
 

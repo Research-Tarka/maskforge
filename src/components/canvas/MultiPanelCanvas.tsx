@@ -1,5 +1,6 @@
 /**
- * Arranges 1-4 LayerCanvas panels (raw / shadow / mask combinations) in a
+ * Arranges a variable number of LayerCanvas panels (RGB composite views plus
+ * the mask, per the layout panel's visibility/order choices) in a
  * responsive grid, all sharing pan/zoom through viewportStore. A single
  * transparent interaction surface spans all panels: pointer events are
  * captured once, converted to world coordinates, and routed to the active
@@ -20,6 +21,8 @@ import { useToolStore } from "@/state/toolStore";
 import { useClassStore } from "@/state/classStore";
 import { useSessionStore } from "@/state/sessionStore";
 import { useAutoSegmentStore } from "@/state/autoSegmentStore";
+import { MASK_KEY } from "@/state/layoutStore";
+import { createMaskCanvas } from "@/components/canvas/maskCanvas";
 import type { SceneLayers } from "@/types/api";
 import { applyTool, applyAutoSegmentComponent } from "@/api/client";
 
@@ -31,12 +34,21 @@ interface PanelConfig {
 interface MultiPanelCanvasProps {
   sceneLayers: SceneLayers | null;
   panels: PanelConfig[];
-  /** One width in px per panel, left to right. */
+  /** One width in px per panel, left to right, top to bottom (row-major). */
   panelWidths: number[];
   panelHeight: number;
+  /** Number of columns in the grid -- panels wrap to a new row after this
+   * many, forming a near-square matrix (e.g. 5 panels -> 3 cols x 2 rows)
+   * instead of squeezing every panel into a single ever-thinner row. */
+  columns: number;
   showContours: boolean;
   showDiff: boolean;
-  onMaskUpdated?: (pngBase64: string, bbox: [number, number, number, number]) => void;
+  /** Called after a one-off edit (bucket/polygon/autofill/component-assign)
+   * or once at the end of a brush drag (not per stamp) -- re-fetches
+   * sceneLayers from the server and resolves with the fresh value, so the
+   * undo-diff snapshot below and stats can use it directly instead of
+   * racing the async setState it triggers. */
+  onStrokeEnd?: () => Promise<SceneLayers | null>;
 }
 
 const CURSOR_COLOR = "#f5c542";
@@ -46,9 +58,10 @@ export default function MultiPanelCanvas({
   panels,
   panelWidths,
   panelHeight,
+  columns,
   showContours,
   showDiff,
-  onMaskUpdated,
+  onStrokeEnd,
 }: MultiPanelCanvasProps) {
   const scale = useViewportStore((s) => s.scale);
   const offsetX = useViewportStore((s) => s.offsetX);
@@ -84,6 +97,42 @@ export default function MultiPanelCanvas({
   // fills the whole polygon at once.
   const [polygonPoints, setPolygonPoints] = useState<{ x: number; y: number }[]>([]);
 
+  // A persistent canvas holding the mask's current pixels, patched in place
+  // by every /tool response's small bbox crop rather than replaced wholesale
+  // -- see maskCanvas.ts. Kept in a ref (not React state) since it's mutated
+  // very frequently (every stamp mid-drag) and mutating it must never itself
+  // trigger a re-render; `maskRedrawToken` is the one piece of state bumped
+  // after each mutation, purely to tell LayerCanvas's Konva layer to redraw.
+  const maskCanvasHandleRef = useRef(createMaskCanvas());
+  const [maskRedrawToken, setMaskRedrawToken] = useState(0);
+  // The png_base64 the canvas was last fully loaded from -- lets the load
+  // effect below skip re-decoding the whole layer again on a render where
+  // sceneLayers.mask is a new object but its actual bytes are unchanged.
+  const loadedMaskSourceRef = useRef<string | null>(null);
+
+  // Full (re)load whenever the mask layer's actual bytes change for a reason
+  // other than our own incremental patches (scene switch, undo/redo,
+  // auto-segment apply/fill-all, or the very first load) -- those still go
+  // through the ordinary getSceneLayers fetch in App.tsx and land here as a
+  // new sceneLayers.mask.
+  useEffect(() => {
+    const mask = sceneLayers?.mask;
+    if (!mask) {
+      loadedMaskSourceRef.current = null;
+      return;
+    }
+    if (loadedMaskSourceRef.current === mask.png_base64) return;
+    let cancelled = false;
+    maskCanvasHandleRef.current.loadFull(mask.png_base64, mask.width, mask.height).then(() => {
+      if (cancelled) return;
+      loadedMaskSourceRef.current = mask.png_base64;
+      setMaskRedrawToken((t) => t + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sceneLayers?.mask]);
+
   const toScreenToWorld = useCallback(
     (screenX: number, screenY: number) => ({
       x: (screenX - offsetX) / scale,
@@ -106,6 +155,18 @@ export default function MultiPanelCanvas({
 
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
 
+  // Draw a /tool response's small RGBA crop directly onto the persistent
+  // mask canvas at its bbox, instead of round-tripping through
+  // App.tsx's getSceneLayers (which re-fetches and re-decodes the *entire*
+  // scene's mask layer). This is what makes a brush stroke feel instant --
+  // the network response is already just the small changed region; the only
+  // thing standing between that and a full-layer refetch was this function.
+  const applyPatch = useCallback((pngBase64: string, bbox: [number, number, number, number]) => {
+    void maskCanvasHandleRef.current.patchRegion(pngBase64, bbox).then(() => {
+      setMaskRedrawToken((t) => t + 1);
+    });
+  }, []);
+
   const paintAt = useCallback(
     async (screenPos: { x: number; y: number }, continueStroke = false) => {
       if (!activeScene || !selectedClass) return;
@@ -121,7 +182,8 @@ export default function MultiPanelCanvas({
             continue_stroke: continueStroke,
           });
           setPaintError(null);
-          onMaskUpdated?.(result.png_base64, result.bbox);
+          applyPatch(result.png_base64, result.bbox);
+          if (!continueStroke) void onStrokeEnd?.();
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           console.error("applyTool failed:", err);
@@ -147,14 +209,24 @@ export default function MultiPanelCanvas({
           continue_stroke: continueStroke,
         });
         setPaintError(null);
-        onMaskUpdated?.(result.png_base64, result.bbox);
+        applyPatch(result.png_base64, result.bbox);
+        // Skip the network refresh (onStrokeEnd) for every brush stamp --
+        // the canvas patch above already made the change visible instantly,
+        // and handlePointerUp does the one refresh needed once the whole
+        // drag ends. Without this, a brush stroke's first stamp (fired from
+        // pointerDown, which always passes continueStroke=false) would pay
+        // for a full getSceneLayers round trip immediately, then pointerUp
+        // would pay for a second, redundant one right after -- for
+        // bucket/polygon/autofill (single-stamp tools, no drag) this is the
+        // only refresh they get, so they still need it here.
+        if (!continueStroke && activeTool !== "brush") void onStrokeEnd?.();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error("applyTool failed:", err);
         setPaintError(message);
       }
     },
-    [activeScene, activeTool, brushSize, tolerance, selectedClass, toScreenToWorld, onMaskUpdated],
+    [activeScene, activeTool, brushSize, tolerance, selectedClass, toScreenToWorld, applyPatch, onStrokeEnd],
   );
 
   const fillPolygon = useCallback(
@@ -167,14 +239,15 @@ export default function MultiPanelCanvas({
           class_value: selectedClass.value,
         });
         setPaintError(null);
-        onMaskUpdated?.(result.png_base64, result.bbox);
+        applyPatch(result.png_base64, result.bbox);
+        void onStrokeEnd?.();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error("applyTool (polygon) failed:", err);
         setPaintError(message);
       }
     },
-    [activeScene, selectedClass, onMaskUpdated],
+    [activeScene, selectedClass, applyPatch, onStrokeEnd],
   );
 
   const assignComponentAt = useCallback(
@@ -187,12 +260,13 @@ export default function MultiPanelCanvas({
           y: Math.round(world.y),
           class_value: assignClassValue,
         });
-        onMaskUpdated?.(result.png_base64, result.bbox);
+        applyPatch(result.png_base64, result.bbox);
+        void onStrokeEnd?.();
       } catch {
         // Surfaced via the auto-segment panel's own error state.
       }
     },
-    [activeScene, assignClassValue, toScreenToWorld, onMaskUpdated],
+    [activeScene, assignClassValue, toScreenToWorld, applyPatch, onStrokeEnd],
   );
 
   const closePolygon = useCallback(() => {
@@ -302,27 +376,33 @@ export default function MultiPanelCanvas({
       if (isPaintingRef.current) {
         isPaintingRef.current = false;
         setIsDrawing(false);
-        // Record an undo diff for the stroke using before/after mask
-        // snapshots. Byte-accurate diffs are computed server-side per
-        // stamp; here we snapshot whole-layer PNG bytes as a pragmatic
-        // approximation so undo/redo works even across multi-stamp
-        // strokes without a bespoke diff protocol.
+        // Mid-drag stamps skip the network refresh (see paintAt) so the
+        // stroke itself never waits on a round trip -- this is the one
+        // point that resyncs sceneLayers.mask with the server, needed both
+        // for the undo diff below and for the contour/diff overlays (which
+        // read sceneLayers.mask, not the patched canvas). Only fires once
+        // per whole stroke, not once per stamp. Awaits the fresh layers
+        // directly (onStrokeEnd's return value) rather than reading
+        // sceneLayers afterwards, which would still be the stale pre-fetch
+        // value from this render's closure.
         const before = lastMaskSnapshotRef.current;
-        const after = sceneLayers?.mask?.png_base64 ?? null;
-        if (before && after && before !== after && activeScene) {
-          const enc = new TextEncoder();
-          pushDiff({
-            sceneId: activeScene.id,
-            bbox: { x: 0, y: 0, width: sceneLayers?.mask?.width ?? 0, height: sceneLayers?.mask?.height ?? 0 },
-            beforePixels: enc.encode(before),
-            afterPixels: enc.encode(after),
-            label: `${activeTool} on ${activeScene.id}`,
-            timestamp: Date.now(),
-          });
-        }
+        void onStrokeEnd?.().then((freshLayers) => {
+          const after = freshLayers?.mask?.png_base64 ?? null;
+          if (before && after && before !== after && activeScene) {
+            const enc = new TextEncoder();
+            pushDiff({
+              sceneId: activeScene.id,
+              bbox: { x: 0, y: 0, width: freshLayers?.mask?.width ?? 0, height: freshLayers?.mask?.height ?? 0 },
+              beforePixels: enc.encode(before),
+              afterPixels: enc.encode(after),
+              label: `${activeTool} on ${activeScene.id}`,
+              timestamp: Date.now(),
+            });
+          }
+        });
       }
     },
-    [activeScene, activeTool, pushDiff, sceneLayers],
+    [activeScene, activeTool, pushDiff, onStrokeEnd],
   );
 
   // Memoized so identity only changes when the preview's own clusters (or
@@ -363,14 +443,13 @@ export default function MultiPanelCanvas({
           </button>
         </div>
       )}
-      <div className="multi-panel-canvas">
+      <div
+        className="multi-panel-canvas"
+        style={{ gridTemplateColumns: `repeat(${Math.max(1, columns)}, max-content)` }}
+      >
         {panels.map((panel, i) => {
           const layerData =
-            panel.kind === "raw"
-              ? sceneLayers?.raw ?? null
-              : panel.kind === "shadow"
-                ? sceneLayers?.shadow ?? null
-                : sceneLayers?.mask ?? null;
+            panel.kind === MASK_KEY ? sceneLayers?.mask ?? null : sceneLayers?.rgb[panel.kind] ?? null;
 
           const width = panelWidths[i] ?? 0;
 
@@ -395,6 +474,8 @@ export default function MultiPanelCanvas({
                 autoSegmentPreviewPngBase64={isDrawing ? null : autoSegmentPreview?.preview_png_base64 ?? null}
                 autoSegmentClusterColors={autoSegmentClusterColors}
                 autoSegmentAssignedClusterIds={autoSegmentAssignedIds}
+                maskCanvas={panel.kind === MASK_KEY ? maskCanvasHandleRef.current.canvas : undefined}
+                redrawToken={panel.kind === MASK_KEY ? maskRedrawToken : undefined}
               />
               <Stage
                 className="multi-panel-canvas__interaction-surface"
@@ -413,7 +494,7 @@ export default function MultiPanelCanvas({
                 onDblTap={handleDoubleClick}
                 onContextMenu={(e) => e.evt.preventDefault()}
               >
-                {panel.kind === "mask" && showDiff && (
+                {panel.kind === MASK_KEY && showDiff && (
                   <DiffOverlay
                     beforeBase64={lastMaskSnapshotRef.current}
                     afterBase64={sceneLayers?.mask?.png_base64 ?? null}
@@ -422,7 +503,7 @@ export default function MultiPanelCanvas({
                     visible={showDiff}
                   />
                 )}
-                {panel.kind === "mask" && !isDrawing && autoSegmentPreview && (
+                {panel.kind === MASK_KEY && !isDrawing && autoSegmentPreview && (
                   <AutoSegmentPreviewOverlay
                     previewPngBase64={autoSegmentPreview.preview_png_base64}
                     width={sceneLayers?.mask?.width ?? 0}

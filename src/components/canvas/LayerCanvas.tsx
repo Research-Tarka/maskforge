@@ -1,8 +1,9 @@
 /**
- * Renders a single canvas panel (raw / shadow / mask) as a Konva Stage.
- * Pan/zoom are driven entirely by viewportStore so every panel in the
- * MultiPanelCanvas stays in sync. The base image comes from LayerData's
- * png_base64; an optional contour overlay renders on top for mask panels.
+ * Renders a single canvas panel (an RGB composite view, or the mask) as a
+ * Konva Stage. Pan/zoom are driven entirely by viewportStore so every panel
+ * in the MultiPanelCanvas stays in sync. The base image comes from
+ * LayerData's png_base64; an optional contour overlay renders on top for
+ * mask panels.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -12,8 +13,12 @@ import type { LayerData } from "@/types/api";
 import { useViewportStore } from "@/state/viewportStore";
 import ContourOverlay from "@/components/canvas/ContourOverlay";
 import AutoSegmentContourOverlay from "@/components/canvas/AutoSegmentContourOverlay";
+import { MASK_KEY } from "@/state/layoutStore";
 
-export type LayerKind = "raw" | "shadow" | "mask";
+/** A layer key: "mask", or any RGB composite view name (e.g.
+ * "rgb_true_color") -- not a closed set, since a scene can have any number
+ * of detected "rgb*" views. */
+export type LayerKind = string;
 
 interface LayerCanvasProps {
   kind: LayerKind;
@@ -39,6 +44,15 @@ interface LayerCanvasProps {
   autoSegmentPreviewPngBase64?: string | null;
   autoSegmentClusterColors?: Record<number, [number, number, number]>;
   autoSegmentAssignedClusterIds?: Set<number>;
+  /** When set (the mask panel only), renders from this persistent canvas
+   * instead of decoding layerData.png_base64 into a fresh <img> -- lets the
+   * caller patch just a changed region in place (see maskCanvas.ts) without
+   * a full image swap on every brush stamp. `redrawToken` must be bumped
+   * after every direct mutation of the canvas so Konva re-renders it (Konva
+   * caches the canvas by reference and won't notice in-place pixel
+   * changes on its own). */
+  maskCanvas?: HTMLCanvasElement | null;
+  redrawToken?: number;
 }
 
 function useHtmlImage(base64: string | undefined): HTMLImageElement | null {
@@ -74,31 +88,41 @@ export default function LayerCanvas({
   autoSegmentPreviewPngBase64,
   autoSegmentClusterColors,
   autoSegmentAssignedClusterIds,
+  maskCanvas,
+  redrawToken,
 }: LayerCanvasProps) {
   const stageRef = useRef<Konva.Stage | null>(null);
+  const imageRef = useRef<Konva.Image | null>(null);
   const scale = useViewportStore((s) => s.scale);
   const offsetX = useViewportStore((s) => s.offsetX);
   const offsetY = useViewportStore((s) => s.offsetY);
 
-  const image = useHtmlImage(layerData?.png_base64);
+  // maskCanvas is the fast path (in-place patched, see maskCanvas.ts) --
+  // decoding layerData.png_base64 into a brand new <img> is only needed for
+  // panels without one (every RGB composite view, which never changes mid-
+  // session) or as a fallback before the mask canvas has been initialized.
+  const decodedImage = useHtmlImage(maskCanvas ? undefined : layerData?.png_base64);
+  const image = maskCanvas ?? decodedImage;
 
   useEffect(() => {
     if (stageRef.current && onStageReady) onStageReady(stageRef.current);
   }, [onStageReady]);
 
+  // Konva's Image caches its source by reference; an in-place canvas patch
+  // (drawImage onto the same HTMLCanvasElement) doesn't change that
+  // reference, so Konva has no way to know the pixels changed. Forcing a
+  // manual redraw whenever the caller bumps redrawToken is what actually
+  // makes a patch visible.
+  useEffect(() => {
+    imageRef.current?.getLayer()?.batchDraw();
+  }, [redrawToken]);
+
   const emptyMessage = useMemo(() => {
     if (layerData) return null;
-    switch (kind) {
-      case "raw":
-        return "No raw layer for this scene";
-      case "shadow":
-        return "No shadow layer — generate one from the Shadow panel";
-      case "mask":
-        return "No mask yet — paint to create one";
-      default:
-        return "No data";
-    }
-  }, [kind, layerData]);
+    if (kind === MASK_KEY) return "No mask yet — paint to create one";
+    if (kind === "rgb_true_color_shadow") return "No shadow layer — generate one from the Shadow panel";
+    return `No ${label.toLowerCase()} layer for this scene`;
+  }, [kind, label, layerData]);
 
   return (
     <div className="layer-canvas" data-kind={kind}>
@@ -132,9 +156,10 @@ export default function LayerCanvas({
             />
             {image && (
               <KonvaImage
+                ref={imageRef}
                 image={image}
-                width={layerData?.width}
-                height={layerData?.height}
+                width={layerData?.width ?? image.width}
+                height={layerData?.height ?? image.height}
               />
             )}
           </Layer>

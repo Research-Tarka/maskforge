@@ -18,6 +18,7 @@ const PANEL_TOGGLES: { id: PanelId; label: string; disabled?: boolean }[] = [
   { id: "stats", label: "Stats" },
   { id: "keybindings", label: "Shortcuts", disabled: true },
   { id: "autoSegment", label: "Auto-segment" },
+  { id: "layout", label: "Layout" },
 ];
 
 export default function Toolbar() {

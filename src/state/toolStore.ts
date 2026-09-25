@@ -83,7 +83,7 @@ export const useToolStore = create<ToolState>((set, get) => ({
   usedBytes: 0,
 
   setActiveTool: (tool) => set({ activeTool: tool }),
-  setBrushSize: (size) => set({ brushSize: Math.max(1, Math.round(size)) }),
+  setBrushSize: (size) => set({ brushSize: Math.min(50, Math.max(1, Math.round(size))) }),
   setTolerance: (tolerance) => set({ tolerance: Math.min(255, Math.max(0, Math.round(tolerance))) }),
   setMemoryCapBytes: (cap) => {
     const { undoStack } = get();

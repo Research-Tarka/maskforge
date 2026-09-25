@@ -157,14 +157,24 @@ def read_image_any(path: str | Path) -> tuple[np.ndarray, dict[str, Any]]:
 
 
 def array_to_png_base64(arr: np.ndarray) -> str:
-    """Encode an (H, W) / (H, W, 3) / (H, W, 4) uint8 array as base64 PNG."""
+    """Encode an (H, W) / (H, W, 3) / (H, W, 4) uint8 array as base64 PNG.
+
+    ``compress_level=1`` (Pillow's PNG encoder default is 6, zlib's own
+    default is also higher than this) trades a somewhat larger PNG for a
+    much faster encode -- this is sent to localhost only and re-decoded
+    immediately by the frontend's own <img> tag, not archived, so the extra
+    bytes cost nothing that matters while the encode time is on the hot path
+    for every brush stamp mid-drag (each stroke re-encodes the whole scene's
+    layers, see scenes.py:get_layers) and for every RGB composite panel
+    shown at scene load.
+    """
     import base64
 
     if arr.dtype != np.uint8:
         arr = np.clip(arr, 0, 255).astype(np.uint8)
     img = Image.fromarray(arr)
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    img.save(buf, format="PNG", compress_level=1)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 

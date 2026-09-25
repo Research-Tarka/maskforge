@@ -209,19 +209,40 @@ def _load_scene_image(path_str: str | None, expected_shape: tuple[int, int], lab
     return image
 
 
-def _load_auto_segment_source(scene, source: str, mask_shape: tuple[int, int]) -> np.ndarray:
-    if source == "raw":
-        return _load_scene_image(scene.raw_path, mask_shape, "raw")
-    if source == "shadow":
-        return _load_scene_image(scene.shadow_path, mask_shape, "shadow")
-    # "both": stack raw and shadow bands together so clustering sees
-    # information from both — e.g. shadow's contrast/gamma processing can
-    # separate colors that look identical in the raw image alone.
-    raw = _load_scene_image(scene.raw_path, mask_shape, "raw")
-    shadow = _load_scene_image(scene.shadow_path, mask_shape, "shadow")
-    raw = raw if raw.ndim == 3 else raw[..., np.newaxis]
-    shadow = shadow if shadow.ndim == 3 else shadow[..., np.newaxis]
-    return np.concatenate([raw, shadow], axis=-1)
+def _resolve_source_path(scene, source: str) -> str | None:
+    """Resolve one requested source name to a scene's image path.
+
+    Checks scene.rgb_composites first (the general, zarr-backed case, where
+    a source name is any RGB composite view like "rgb_natural_color"), then
+    falls back to the legacy raw_path/shadow_path fields under their
+    conventional names -- covers both a zarr scene (rgb_composites
+    populated) and a plain-file scene (rgb_composites empty, only raw/shadow
+    ever exist) plus the old "raw"/"shadow" request values some callers may
+    still send.
+    """
+    if source in scene.rgb_composites:
+        return scene.rgb_composites[source]
+    if source in ("raw", "rgb_true_color"):
+        return scene.raw_path
+    if source in ("shadow", "rgb_true_color_shadow"):
+        return scene.shadow_path
+    return None
+
+
+def _load_auto_segment_sources(scene, sources: list[str], mask_shape: tuple[int, int]) -> np.ndarray:
+    """Load and band-concatenate every requested source image.
+
+    Stacking multiple RGB composites together gives clustering more
+    information than any single one alone — e.g. an infrared composite can
+    separate colors that look identical in true color. Generalizes what used
+    to be a fixed raw/shadow/both choice to any number of checked composites.
+    """
+    bands = []
+    for source in sources:
+        path = _resolve_source_path(scene, source)
+        image = _load_scene_image(path, mask_shape, source)
+        bands.append(image if image.ndim == 3 else image[..., np.newaxis])
+    return bands[0] if len(bands) == 1 else np.concatenate(bands, axis=-1)
 
 
 @router.post("/{scene_id}/auto-segment", response_model=AutoSegmentResponse)
@@ -243,7 +264,7 @@ def auto_segment_preview(scene_id: str, req: AutoSegmentRequest) -> AutoSegmentR
     if scene is None:
         raise HTTPException(status_code=404, detail=f"Scene not found: {scene_id}")
 
-    image = _load_auto_segment_source(scene, req.source, buf.classes.shape)
+    image = _load_auto_segment_sources(scene, req.sources, buf.classes.shape)
 
     # Re-running auto-segment should only re-cluster pixels not yet painted
     # (by hand or from a previously-applied cluster) -- otherwise every call
@@ -293,20 +314,34 @@ def auto_segment_preview(scene_id: str, req: AutoSegmentRequest) -> AutoSegmentR
 def _tool_response_from_change(buf: MaskBuffer, change_mask: np.ndarray) -> ToolResponse:
     """Shared response-building for any operation that rewrites part of the
     mask via a boolean change_mask: updates the contour cache and encodes
-    just the affected bounding box as the response, matching /tool's shape."""
+    just the affected bounding box as the response, matching /tool's shape.
+
+    The returned PNG is real display-ready RGBA (palette colors, unpainted
+    pixels white) -- the same rendering _layer_from_mask_buffer uses for the
+    whole layer -- so the frontend can paint this small crop directly onto
+    its persistent mask canvas at (x0, y0) instead of re-fetching and
+    re-encoding the *entire* scene's mask layer after every single brush
+    stamp mid-drag, which is what made freehand painting laggy (each
+    round trip re-rendered and re-transmitted the whole image just to show
+    a few changed pixels).
+    """
     if not change_mask.any():
-        empty = np.zeros(buf.classes.shape, dtype=np.uint8)
-        rgba = np.stack([empty, empty, empty, empty], axis=-1)
-        return ToolResponse(png_base64=raster_io.array_to_png_base64(rgba), bbox=(0, 0, 0, 0), changed_pixels=0)
+        return ToolResponse(png_base64=raster_io.array_to_png_base64(np.zeros((1, 1, 4), dtype=np.uint8)), bbox=(0, 0, 0, 0), changed_pixels=0)
 
     bbox = bbox_from_change_mask(change_mask) or (0, 0, 0, 0)
     buf.contour_cache.update(buf.classes, bbox)
 
     y0, x0, y1, x1 = bbox
     region = buf.classes[y0:y1, x0:x1]
-    region_rgba = np.zeros((*region.shape, 4), dtype=np.uint8)
-    region_rgba[..., 0] = region
-    region_rgba[..., 3] = np.where(region == raster_io.NODATA_VALUE, 0, 255)
+
+    palette = get_state().get_active_palette()
+    class_colors = palette.color_map() if palette is not None else {}
+    class_values = palette.value_map() if palette is not None else {}
+    region_rgb = np.moveaxis(raster_io.classes_to_rgb(region, class_colors, class_values), 0, -1)  # (h, w, 3)
+    region_rgba = np.full((*region.shape, 4), 255, dtype=np.uint8)
+    region_rgba[..., :3] = region_rgb
+    unpainted = region == raster_io.NODATA_VALUE
+    region_rgba[unpainted, :3] = 255  # white, matching _layer_from_mask_buffer's convention
 
     return ToolResponse(
         png_base64=raster_io.array_to_png_base64(region_rgba),

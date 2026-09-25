@@ -7,22 +7,17 @@
  * then apply on top of the mask and keep correcting with the normal tools.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSessionStore } from "@/state/sessionStore";
 import { useClassStore } from "@/state/classStore";
 import { useAutoSegmentStore } from "@/state/autoSegmentStore";
+import { layerLabel, rgbKeysForScene } from "@/state/layoutStore";
 import { previewAutoSegment, applyAutoSegment, discardAutoSegment } from "@/api/client";
-import type { AutoSegmentRequest, ClusterMethod } from "@/types/api";
+import type { ClusterMethod } from "@/types/api";
 
 const METHODS: { id: ClusterMethod; label: string }[] = [
   { id: "kmeans", label: "K-Means" },
   { id: "gmm", label: "Gaussian mixture" },
-];
-
-const SOURCES: { id: AutoSegmentRequest["source"]; label: string }[] = [
-  { id: "raw", label: "Raw" },
-  { id: "shadow", label: "Shadow" },
-  { id: "both", label: "Raw + Shadow combined" },
 ];
 
 function rgbString(color: number[]): string {
@@ -46,10 +41,30 @@ export default function AutoSegmentPanel() {
 
   const maxClusters = Math.max(2, activeClasses.length || 2);
 
-  const [source, setSource] = useState<AutoSegmentRequest["source"]>("raw");
+  // Every RGB composite view this scene has -- the checked subset is
+  // stacked band-wise server-side before clustering (see
+  // masks.py::_load_auto_segment_sources), so any combination is valid, not
+  // just the old fixed raw/shadow/both choices.
+  const availableSources = useMemo(() => rgbKeysForScene(activeScene), [activeScene]);
+  const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [nClusters, setNClusters] = useState(maxClusters);
   const [method, setMethod] = useState<ClusterMethod>("kmeans");
   const [useTexture, setUseTexture] = useState(true);
+
+  // Default to every available source selected when the scene (and thus its
+  // set of RGB views) changes, rather than leaving the picker empty.
+  useEffect(() => {
+    setSelectedSources(new Set(availableSources));
+  }, [availableSources]);
+
+  const toggleSource = (id: string) => {
+    setSelectedSources((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   // Keep the cluster count within [2, number of active classes] as the
   // active palette changes — a cluster with nowhere to be assigned isn't
@@ -78,7 +93,7 @@ export default function AutoSegmentPanel() {
   const [result, setResult] = useState<string | null>(null);
 
   const handlePreview = async () => {
-    if (!activeScene) return;
+    if (!activeScene || selectedSources.size === 0) return;
     setPreviewing(true);
     setError(null);
     setResult(null);
@@ -86,7 +101,7 @@ export default function AutoSegmentPanel() {
     setAssignMode(false);
     try {
       const res = await previewAutoSegment(activeScene.id, {
-        source,
+        sources: [...selectedSources],
         n_clusters: nClusters,
         method,
         use_texture: useTexture,
@@ -160,19 +175,21 @@ export default function AutoSegmentPanel() {
       </p>
 
       <div className="panel__field">
-        <label htmlFor="autoseg-source">Source image</label>
-        <select
-          id="autoseg-source"
-          value={source}
-          onChange={(e) => setSource(e.target.value as AutoSegmentRequest["source"])}
-        >
-          {SOURCES.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-        <p className="panel__hint">Combining raw and shadow gives the clustering more information to work with — e.g. it can separate colors that look identical in the raw image alone.</p>
+        <span className="panel__label">Source image(s)</span>
+        {availableSources.length === 0 && (
+          <p className="panel__hint">This scene has no RGB views to segment.</p>
+        )}
+        {availableSources.map((id) => (
+          <label key={id} className="panel__checkbox">
+            <input type="checkbox" checked={selectedSources.has(id)} onChange={() => toggleSource(id)} />
+            {layerLabel(id)}
+          </label>
+        ))}
+        <p className="panel__hint">
+          Check any combination of the detected RGB views &mdash; they&rsquo;re stacked together
+          before clustering, giving it more information than any single view alone (e.g. an
+          infrared view can separate colors that look identical in true color).
+        </p>
       </div>
 
       <div className="panel__field">
@@ -212,7 +229,11 @@ export default function AutoSegmentPanel() {
         Include local texture (helps separate smooth vs. rough areas of similar color)
       </label>
 
-      <button type="button" onClick={() => void handlePreview()} disabled={previewing || !activeScene}>
+      <button
+        type="button"
+        onClick={() => void handlePreview()}
+        disabled={previewing || !activeScene || selectedSources.size === 0}
+      >
         {previewing ? "Clustering…" : "Preview"}
       </button>
 

@@ -5,7 +5,7 @@
  * sidecar's IPC_CONTRACT_VERSION exactly.
  */
 
-export const IPC_CONTRACT_VERSION = "1.0.0";
+export const IPC_CONTRACT_VERSION = "1.1.0";
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -38,6 +38,11 @@ export interface SceneEntry {
   detected_crs: string | null;
   mode: SceneMode;
   qa_status: QaStatus;
+  /** Every RGB composite view this scene has, {view_name: composite_path}
+   * (e.g. "rgb_true_color", "rgb_natural_color", "rgb_color_infrared").
+   * Only populated for a zarr-backed scene; empty for a plain-file scene
+   * (where raw_path/shadow_path are the only two views that can exist). */
+  rgb_composites: Record<string, string>;
 }
 
 export interface ScanRule {
@@ -97,8 +102,11 @@ export interface LayerData {
 }
 
 export interface SceneLayers {
-  raw: LayerData | null;
-  shadow: LayerData | null;
+  /** Every RGB composite view currently rendered, keyed by view name (e.g.
+   * "rgb_true_color") -- replaces the old fixed raw/shadow pair now that a
+   * scene can have up to 4 (or more) RGB visuals. Only the views requested
+   * from getSceneLayers are populated. */
+  rgb: Record<string, LayerData>;
   mask: LayerData | null;
 }
 
@@ -120,6 +128,8 @@ export interface ToolRequest {
 
 export interface ToolResult {
   png_base64: string;
+  /** [y0, x0, y1, x1] (row-major, matching the sidecar's BBox convention in
+   * contours.py::bbox_from_change_mask) -- NOT [x0, y0, x1, y1]. */
   bbox: [number, number, number, number];
 }
 
@@ -133,7 +143,10 @@ export type ClusterMethod = "kmeans" | "gmm";
 /** Unsupervised clustering draft — see docs/IPC_CONTRACT.md. A rough
  * starting point to correct, not a classification result. CPU only. */
 export interface AutoSegmentRequest {
-  source: "raw" | "shadow" | "both";
+  /** Which RGB composite view(s) to cluster on, by name (e.g.
+   * ["rgb_true_color", "rgb_color_infrared"]) -- at least one required.
+   * Multiple sources are stacked band-wise before clustering. */
+  sources: string[];
   n_clusters: number;
   method: ClusterMethod;
   use_texture: boolean;

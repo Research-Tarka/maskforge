@@ -135,10 +135,17 @@ class TestSceneDiscoveryEndToEnd:
         layers_resp = client.get(f"{API}/scenes/{scene_id}/layers")
         assert layers_resp.status_code == 200
         layers = layers_resp.json()
-        assert layers["raw"] is not None
-        assert layers["raw"]["width"] == 32
-        assert layers["raw"]["height"] == 32
-        assert layers["mask"] is None
+        # A plain-file scene has no rgb_composites -- /layers falls back to
+        # exposing its raw_path under the conventional "rgb_true_color" key.
+        assert layers["rgb"]["rgb_true_color"] is not None
+        assert layers["rgb"]["rgb_true_color"]["width"] == 32
+        assert layers["rgb"]["rgb_true_color"]["height"] == 32
+        # No mask.tif on disk yet -- /layers still renders the freshly
+        # created in-memory buffer (a blank, paintable canvas) rather than
+        # returning None (see _ensure_buffer/_layer_from_mask_buffer).
+        assert layers["mask"] is not None
+        assert layers["mask"]["width"] == 32
+        assert layers["mask"]["height"] == 32
 
     def test_layers_404_for_unknown_scene(self, client: TestClient):
         resp = client.get(f"{API}/scenes/does-not-exist/layers")
@@ -656,7 +663,7 @@ class TestAutoSegmentEndpoints:
 
         preview_resp = client.post(
             f"{API}/masks/{scene_id}/auto-segment",
-            json={"source": "raw", "n_clusters": 3, "method": "kmeans", "use_texture": True},
+            json={"sources": ["raw"], "n_clusters": 3, "method": "kmeans", "use_texture": True},
         )
         assert preview_resp.status_code == 200
         body = preview_resp.json()
@@ -717,7 +724,7 @@ class TestAutoSegmentEndpoints:
 
         preview_resp = client.post(
             f"{API}/masks/{scene_id}/auto-segment",
-            json={"source": "raw", "n_clusters": 2, "method": "kmeans", "use_texture": False},
+            json={"sources": ["raw"], "n_clusters": 2, "method": "kmeans", "use_texture": False},
         )
         assert preview_resp.status_code == 200
 
@@ -779,7 +786,7 @@ class TestAutoSegmentEndpoints:
 
         preview_resp = client.post(
             f"{API}/masks/{scene_id}/auto-segment",
-            json={"source": "raw", "n_clusters": 2, "method": "kmeans", "use_texture": False},
+            json={"sources": ["raw"], "n_clusters": 2, "method": "kmeans", "use_texture": False},
         )
         assert preview_resp.status_code == 200
 
@@ -829,7 +836,7 @@ class TestAutoSegmentEndpoints:
 
         resp = client.post(
             f"{API}/masks/{scene_id}/auto-segment",
-            json={"source": "shadow", "n_clusters": 3, "method": "kmeans", "use_texture": True},
+            json={"sources": ["shadow"], "n_clusters": 3, "method": "kmeans", "use_texture": True},
         )
         assert resp.status_code == 422
 

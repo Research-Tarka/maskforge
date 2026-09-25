@@ -439,11 +439,15 @@ input[type="range"] {
 }
 
 .multi-panel-canvas {
-  display: flex;
+  display: grid;
+  grid-auto-rows: max-content;
+  justify-content: flex-start;
+  align-content: flex-start;
   gap: 8px;
   flex: 1;
   min-height: 0;
   min-width: 0;
+  overflow: auto;
 }
 
 .multi-panel-canvas__cell {
@@ -1159,5 +1163,40 @@ input[type="range"] {
   border-radius: 4px;
   max-height: 50vh;
   overflow: auto;
+}
+
+.layout-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.layout-panel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.layout-panel__checkbox {
+  margin-bottom: 0;
+}
+
+.layout-panel__reorder {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.layout-panel__reorder button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  line-height: 1;
 }
 

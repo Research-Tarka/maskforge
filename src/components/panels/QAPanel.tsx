@@ -11,6 +11,13 @@ import { parseSceneEntryId, MONTH_LABELS } from "@/utils/sceneKey";
 
 const STATUSES: QaStatus[] = ["todo", "in_progress", "validated", "flagged"];
 
+// Cap the rendered queue list so a session with a very large scene count
+// doesn't render thousands of DOM rows at once -- filters (status/tile/
+// satellite/year/month) are the intended way to narrow down to what you
+// need; this is a plain slice rather than a virtualization dependency, per
+// "accept a bit of latency, just don't preload everything".
+const MAX_RENDERED_SCENES = 200;
+
 const STATUS_LABELS: Record<QaStatus, string> = {
   todo: "To do",
   in_progress: "In progress",
@@ -74,6 +81,13 @@ export default function QAPanel() {
       }),
     [scenes, filter, tileFilter, sensorFilter, yearFilter, monthFilter, sceneMeta],
   );
+
+  // O(1) index lookup per row instead of scenes.findIndex(...) inside the
+  // list render (which was O(n) per row, O(n²) for the whole list).
+  const sceneIndexById = useMemo(() => new Map(scenes.map((s, i) => [s.id, i])), [scenes]);
+
+  const visibleScenes = filteredScenes.slice(0, MAX_RENDERED_SCENES);
+  const hiddenCount = filteredScenes.length - visibleScenes.length;
 
   const counts = useMemo(() => {
     const base: Record<QaStatus, number> = { todo: 0, in_progress: 0, validated: 0, flagged: 0 };
@@ -218,8 +232,8 @@ export default function QAPanel() {
       </div>
 
       <ul className="qa-panel__queue">
-        {filteredScenes.map((scene) => {
-          const sceneIndex = scenes.findIndex((s) => s.id === scene.id);
+        {visibleScenes.map((scene) => {
+          const sceneIndex = sceneIndexById.get(scene.id) ?? -1;
           const meta = sceneMeta.get(scene.id);
           return (
             <li key={scene.id} className={sceneIndex === activeSceneIndex ? "is-active" : ""}>
@@ -237,6 +251,11 @@ export default function QAPanel() {
           );
         })}
         {filteredScenes.length === 0 && <li className="qa-panel__empty">No scenes match this filter</li>}
+        {hiddenCount > 0 && (
+          <li className="qa-panel__empty">
+            {hiddenCount} more scene{hiddenCount === 1 ? "" : "s"} match &mdash; narrow the filters above to see them
+          </li>
+        )}
       </ul>
     </section>
   );
