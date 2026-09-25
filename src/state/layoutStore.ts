@@ -23,7 +23,7 @@ const MASK_KEY = "mask";
  * control look permanently disabled. */
 export function rgbKeysForScene(scene: SceneEntry | null): string[] {
   if (!scene) return [];
-  const composites = Object.keys(scene.rgb_composites);
+  const composites = Object.keys(scene.rgb_composites ?? {});
   if (composites.length > 0) return composites;
   const fallback: string[] = [];
   if (scene.raw_path) fallback.push("rgb_true_color");
