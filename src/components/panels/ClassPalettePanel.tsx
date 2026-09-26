@@ -5,7 +5,7 @@
  */
 
 import { useState } from "react";
-import { useClassStore } from "@/state/classStore";
+import { useClassStore, NODATA_CLASS, NODATA_CLASS_ID } from "@/state/classStore";
 import { createPalette, updatePalette, deletePalette } from "@/api/client";
 import Dialog from "@/components/common/Dialog";
 import type { ClassDef, ClassPalette } from "@/types/api";
@@ -35,7 +35,15 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
 }
 
 function nextClassValue(classes: ClassDef[]): number {
-  return classes.reduce((max, c) => Math.max(max, c.value), 0) + 1;
+  // 255 (NODATA_VALUE) is reserved for the synthetic Nodata pseudo-class and
+  // must never be auto-assigned to a real one -- class values are stored as
+  // uint8 on the sidecar, so find the lowest unused value below 255 instead
+  // of just incrementing past it.
+  const used = new Set(classes.map((c) => c.value));
+  for (let v = 0; v < 255; v++) {
+    if (!used.has(v)) return v;
+  }
+  throw new Error("No free class value left (0-254 all in use).");
 }
 
 export default function ClassPalettePanel() {
@@ -197,6 +205,32 @@ export default function ClassPalettePanel() {
             {activePalette.classes.length === 0 && (
               <li className="class-palette-panel__empty">No classes in this palette yet</li>
             )}
+            {/* Reserved pseudo-class for explicitly painting a pixel back to
+                "no data" — not part of the persisted palette, so it has no
+                active toggle or remove button. */}
+            <li
+              key={NODATA_CLASS.id}
+              className={`class-palette-panel__item${selectedClassId === NODATA_CLASS_ID ? " is-selected" : ""}`}
+            >
+              <button
+                type="button"
+                className="class-palette-panel__swatch"
+                style={{
+                  backgroundColor: `rgb(${NODATA_CLASS.color[0]}, ${NODATA_CLASS.color[1]}, ${NODATA_CLASS.color[2]})`,
+                  border: "1px solid var(--border-color, #999)",
+                }}
+                onClick={() => selectClass(NODATA_CLASS_ID)}
+                aria-label="Select class Nodata"
+              />
+              <button
+                type="button"
+                className="class-palette-panel__name"
+                onClick={() => selectClass(NODATA_CLASS_ID)}
+              >
+                {NODATA_CLASS.name}
+                <span className="class-palette-panel__value">#{NODATA_CLASS.value}</span>
+              </button>
+            </li>
           </ul>
 
           <div className="panel__field-row">

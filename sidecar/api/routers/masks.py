@@ -24,6 +24,8 @@ from ..schemas import (
     RemapResponse,
     SaveConfig,
     SaveResponse,
+    SwapClassRequest,
+    SwapClassResponse,
     ToolRequest,
     ToolResponse,
     UndoRedoResponse,
@@ -31,6 +33,33 @@ from ..schemas import (
 from ..state import MaskBuffer, get_state
 
 router = APIRouter(prefix="/masks", tags=["masks"])
+
+
+def resolve_saved_mask_path(scene_id: str) -> str | None:
+    """Re-derive the path the active SaveConfig would have written this
+    scene's mask to, and return it if a file actually exists there.
+
+    Discovery only ever finds a mask sitting inside the scanned
+    source_root -- a mask previously saved to a separate output_root (the
+    normal case: raw imagery and exported masks usually live in different
+    trees) is invisible to it, so SceneEntry.mask_path stays None even
+    though the file is really on disk. Shared by _ensure_buffer (so a scene
+    already annotated in a past session reopens with the real mask, not a
+    blank canvas) and the discovery routes (so a scene already saved shows
+    up "validated" immediately, without the user needing to open it first).
+    """
+    state = get_state()
+    save_config = state.get_active_save_config()
+    if save_config is None or not save_config.output_root:
+        return None
+    try:
+        rel = save_config.folder_structure_template.format(scene_id=scene_id)
+        candidate = _resolve_contained_path(Path(save_config.output_root), rel)
+    except HTTPException:
+        return None
+    if raster_io.image_path_exists(candidate):
+        return str(candidate)
+    return None
 
 
 def _ensure_buffer(scene_id: str) -> MaskBuffer:
@@ -45,23 +74,7 @@ def _ensure_buffer(scene_id: str) -> MaskBuffer:
 
     mask_path_str = scene.mask_path if scene is not None else None
     if not mask_path_str:
-        # Discovery only ever finds a mask sitting inside the scanned
-        # source_root -- a mask previously saved to a separate output_root
-        # (the normal case: raw imagery and exported masks usually live in
-        # different trees) is invisible to it, so SceneEntry.mask_path stays
-        # None even though the file is really on disk. Re-derive the same
-        # path save_mask would have written to and check there too, or a
-        # scene already annotated in a past session reopens with a blank
-        # canvas instead of the mask that was actually saved for it.
-        save_config = state.get_active_save_config()
-        if save_config is not None and save_config.output_root:
-            try:
-                rel = save_config.folder_structure_template.format(scene_id=scene_id)
-                candidate = _resolve_contained_path(Path(save_config.output_root), rel)
-                if raster_io.image_path_exists(candidate):
-                    mask_path_str = str(candidate)
-            except HTTPException:
-                pass
+        mask_path_str = resolve_saved_mask_path(scene_id)
 
     if mask_path_str and raster_io.image_path_exists(mask_path_str):
         if scene is not None and scene.mask_path != mask_path_str:
@@ -105,6 +118,39 @@ def _ensure_buffer(scene_id: str) -> MaskBuffer:
     return buf
 
 
+def _auto_update_qa_status(scene_id: str, *, changed: bool, validated: bool = False) -> str:
+    """Auto-derive a scene's QA status from a mask change (paint) or a save,
+    layered on top of the existing manual QaWorkflow store rather than
+    replacing it.
+
+    - ``validated=True`` (a successful save): unconditionally forces
+      "validated", overriding even "flagged" -- an explicit, deliberate
+      action always wins.
+    - ``changed=True`` otherwise (a paint stroke actually touched a pixel):
+      "todo" -> "in_progress". "flagged" is left untouched (sticky) -- it
+      only clears via a save or a manual de-flag in the QA panel, never by
+      merely painting over it.
+    - No-op (returns the unchanged current status) if ``changed`` is False
+      and not ``validated``.
+
+    Returns the resulting status string so callers can include it in their
+    response without a second lookup.
+    """
+    workflow = get_state().qa_workflow
+    current = workflow.get_status(scene_id).status
+
+    if validated:
+        if current != "validated":
+            workflow.set_status(scene_id, "validated")
+        return "validated"
+
+    if changed and current == "todo":
+        workflow.set_status(scene_id, "in_progress")
+        return "in_progress"
+
+    return current
+
+
 @router.post("/{scene_id}/tool", response_model=ToolResponse)
 def apply_tool(scene_id: str, req: ToolRequest) -> ToolResponse:
     buf = _ensure_buffer(scene_id)
@@ -126,7 +172,7 @@ def apply_tool(scene_id: str, req: ToolRequest) -> ToolResponse:
         classes[change_mask] = req.class_value
         if not change_mask.any() and not req.continue_stroke:
             buf.undo_stack.pop()
-        return _tool_response_from_change(buf, change_mask)
+        return _tool_response_from_change(scene_id, buf, change_mask)
 
     tool = get_tool(req.tool)
     params = dict(req.params)
@@ -165,10 +211,10 @@ def apply_tool(scene_id: str, req: ToolRequest) -> ToolResponse:
     if result is None:
         if not req.continue_stroke:
             buf.undo_stack.pop()
-        return _tool_response_from_change(buf, np.zeros(classes.shape, dtype=bool))
+        return _tool_response_from_change(scene_id, buf, np.zeros(classes.shape, dtype=bool))
 
     change_mask, _prev_values = result
-    return _tool_response_from_change(buf, change_mask)
+    return _tool_response_from_change(scene_id, buf, change_mask)
 
 
 @router.post("/{scene_id}/undo", response_model=UndoRedoResponse)
@@ -311,7 +357,7 @@ def auto_segment_preview(scene_id: str, req: AutoSegmentRequest) -> AutoSegmentR
     )
 
 
-def _tool_response_from_change(buf: MaskBuffer, change_mask: np.ndarray) -> ToolResponse:
+def _tool_response_from_change(scene_id: str, buf: MaskBuffer, change_mask: np.ndarray) -> ToolResponse:
     """Shared response-building for any operation that rewrites part of the
     mask via a boolean change_mask: updates the contour cache and encodes
     just the affected bounding box as the response, matching /tool's shape.
@@ -325,8 +371,16 @@ def _tool_response_from_change(buf: MaskBuffer, change_mask: np.ndarray) -> Tool
     round trip re-rendered and re-transmitted the whole image just to show
     a few changed pixels).
     """
-    if not change_mask.any():
-        return ToolResponse(png_base64=raster_io.array_to_png_base64(np.zeros((1, 1, 4), dtype=np.uint8)), bbox=(0, 0, 0, 0), changed_pixels=0)
+    changed = bool(change_mask.any())
+    qa_status = _auto_update_qa_status(scene_id, changed=changed)
+
+    if not changed:
+        return ToolResponse(
+            png_base64=raster_io.array_to_png_base64(np.zeros((1, 1, 4), dtype=np.uint8)),
+            bbox=(0, 0, 0, 0),
+            changed_pixels=0,
+            qa_status=qa_status,
+        )
 
     bbox = bbox_from_change_mask(change_mask) or (0, 0, 0, 0)
     buf.contour_cache.update(buf.classes, bbox)
@@ -347,6 +401,7 @@ def _tool_response_from_change(buf: MaskBuffer, change_mask: np.ndarray) -> Tool
         png_base64=raster_io.array_to_png_base64(region_rgba),
         bbox=bbox,
         changed_pixels=int(change_mask.sum()),
+        qa_status=qa_status,
     )
 
 
@@ -382,7 +437,7 @@ def auto_segment_apply(scene_id: str, req: ApplyAutoSegmentRequest) -> ToolRespo
         buf.undo_stack.pop()
 
     buf.pending_auto_segment = None
-    return _tool_response_from_change(buf, change_mask)
+    return _tool_response_from_change(scene_id, buf, change_mask)
 
 
 @router.post("/{scene_id}/auto-segment/discard", response_model=DeletedResponse)
@@ -439,7 +494,41 @@ def auto_segment_apply_component(scene_id: str, req: ApplyAutoSegmentComponentRe
     if not change_mask.any():
         buf.undo_stack.pop()
 
-    return _tool_response_from_change(buf, change_mask)
+    return _tool_response_from_change(scene_id, buf, change_mask)
+
+
+@router.post("/{scene_id}/copy-inference", response_model=ToolResponse)
+def copy_inference(scene_id: str) -> ToolResponse:
+    """Copy an externally-produced inference class map onto the mask,
+    filling only pixels still at NODATA_VALUE -- never overwrites a pixel
+    already painted by hand, the same "never touch existing work" rule
+    auto_segment_apply follows. Safe to call repeatedly / at any point in
+    the annotation workflow. 404 if the scene has no inference raster (see
+    SceneEntry.inference_path) -- the frontend keeps this action disabled
+    in that case, but the endpoint re-checks since scene state can change
+    between page load and click."""
+    state = get_state()
+    scene = state.get_scene(scene_id)
+    if scene is None or not scene.inference_path:
+        raise HTTPException(status_code=404, detail=f"Scene has no inference raster: {scene_id}")
+    if not raster_io.image_path_exists(scene.inference_path):
+        raise HTTPException(status_code=404, detail=f"Inference file not found: {scene.inference_path}")
+
+    buf = _ensure_buffer(scene_id)
+    inference_classes, meta = raster_io.read_image_any(scene.inference_path)
+    inference_nodata = meta.get("nodata", raster_io.NODATA_VALUE)
+
+    if inference_classes.shape != buf.classes.shape:
+        inference_classes = raster_io.resample_array(inference_classes, dst_shape=buf.classes.shape, method="mode")
+
+    change_mask = (inference_classes != inference_nodata) & (buf.classes == raster_io.NODATA_VALUE)
+
+    buf.push_undo_snapshot()
+    buf.classes[change_mask] = inference_classes[change_mask]
+    if not change_mask.any():
+        buf.undo_stack.pop()
+
+    return _tool_response_from_change(scene_id, buf, change_mask)
 
 
 def _resolve_contained_path(root: Path, rel: str) -> Path:
@@ -563,7 +652,17 @@ def save_mask(scene_id: str, cfg: SaveConfig) -> SaveResponse:
     if cfg.copy_shadow and scene is not None and scene.shadow_path:
         _copy_alongside(Path(scene.shadow_path), out_path)
 
-    return SaveResponse(path=str(out_path), bytes_written=bytes_written)
+    qa_status = _auto_update_qa_status(scene_id, changed=False, validated=True)
+    if scene is not None:
+        # Keep the cached SceneEntry in sync so /scenes and the QA/Discovery
+        # panels immediately reflect the save without needing a re-discovery
+        # -- mirrors what _ensure_buffer's output_root fallback already does
+        # when it finds a previously-saved mask.
+        scene.mode = "review"
+        scene.qa_status = qa_status  # type: ignore[assignment]
+        state.register_scene(scene)
+
+    return SaveResponse(path=str(out_path), bytes_written=bytes_written, qa_status=qa_status)
 
 
 def _copy_alongside(src: Path, mask_out_path: Path) -> None:
@@ -625,4 +724,36 @@ def remap_mask(scene_id: str, req: RemapRequest) -> RemapResponse:
         buf.contour_cache.invalidate()
         applied = True
 
-    return RemapResponse(affected_pixels=affected_pixels, applied=applied)
+    qa_status = _auto_update_qa_status(scene_id, changed=applied)
+    return RemapResponse(affected_pixels=affected_pixels, applied=applied, qa_status=qa_status)
+
+
+@router.post("/{scene_id}/swap-class", response_model=SwapClassResponse)
+def swap_class(scene_id: str, req: SwapClassRequest) -> SwapClassResponse:
+    """Reassign every pixel currently at ``old_value`` to ``new_value`` --
+    a direct fix for "I painted the wrong class over a region" that works by
+    class value, not rendered color (unlike /remap). This makes it safe for
+    the reserved Nodata pseudo-class (value 255, always rendered white)
+    where /remap's color-based matching would ambiguously also match any
+    real class that happens to render white."""
+    state = get_state()
+    buf = state.get_mask_buffer(scene_id)
+    if buf is None:
+        raise HTTPException(status_code=404, detail=f"No mask buffer for scene: {scene_id}")
+
+    if req.old_value == req.new_value:
+        qa_status = _auto_update_qa_status(scene_id, changed=False)
+        return SwapClassResponse(affected_pixels=0, applied=False, qa_status=qa_status)
+
+    affected_mask = buf.classes == req.old_value
+    affected_pixels = int(affected_mask.sum())
+
+    applied = False
+    if not req.dry_run and affected_pixels > 0:
+        buf.push_undo_snapshot()
+        buf.classes[affected_mask] = req.new_value
+        buf.contour_cache.invalidate()
+        applied = True
+
+    qa_status = _auto_update_qa_status(scene_id, changed=applied)
+    return SwapClassResponse(affected_pixels=affected_pixels, applied=applied, qa_status=qa_status)

@@ -5,7 +5,7 @@
  * sidecar's IPC_CONTRACT_VERSION exactly.
  */
 
-export const IPC_CONTRACT_VERSION = "1.1.0";
+export const IPC_CONTRACT_VERSION = "1.4.0";
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -43,13 +43,23 @@ export interface SceneEntry {
    * Only populated for a zarr-backed scene; empty for a plain-file scene
    * (where raw_path/shadow_path are the only two views that can exist). */
   rgb_composites: Record<string, string>;
+  /** Path to an inference class-map raster produced by an external ML
+   * pipeline, if one was found for this scene (.npz or GeoTIFF). Null means
+   * no inference is available -- the "Copy inference to mask" action stays
+   * disabled in that case. */
+  inference_path: string | null;
 }
 
 export interface ScanRule {
   name: string;
-  raw_patterns: string[];
-  shadow_patterns: string[];
+  /** Filenames matching any of these are recognized as this scene's RGB
+   * source image (a single field -- there is no separate raw/shadow pair
+   * in current usage). */
+  rgb_patterns: string[];
   mask_patterns: string[];
+  /** Filenames matching any of these are recognized as an inference
+   * class-map raster (see sidecar's plugins/inference_reader.py). */
+  inference_patterns: string[];
   max_depth: number;
   file_extensions: string[];
 }
@@ -58,6 +68,10 @@ export interface DiscoveryConfig {
   source_root: string;
   scan_rule: ScanRule;
   exclude_globs: string[];
+  /** Root of an external ML pipeline's inference output, for resolving a
+   * zarr-store scene's inference class map. Null means no inference is
+   * available for any zarr scene. */
+  inference_root: string | null;
 }
 
 export type OutputFormat = "geotiff_rgba" | "geotiff_rgb" | "png" | "png_indexed";
@@ -131,11 +145,19 @@ export interface ToolResult {
   /** [y0, x0, y1, x1] (row-major, matching the sidecar's BBox convention in
    * contours.py::bbox_from_change_mask) -- NOT [x0, y0, x1, y1]. */
   bbox: [number, number, number, number];
+  /** The scene's QA status after this change was applied (see the
+   * sidecar's masks.py::_auto_update_qa_status) -- server-derived, so the
+   * frontend should sync its local scene list from this rather than
+   * assuming its own prior value still holds. */
+  qa_status: QaStatus;
 }
 
 export interface SaveMaskResult {
   path: string;
   bytes_written: number;
+  /** Always "validated" after a successful save -- an explicit override,
+   * even for a scene that was "flagged". */
+  qa_status: QaStatus;
 }
 
 export type ClusterMethod = "kmeans" | "gmm";
@@ -183,6 +205,23 @@ export interface RemapRequest {
 export interface RemapResult {
   affected_pixels: number;
   applied: boolean;
+  qa_status: QaStatus;
+}
+
+/** Reassigns every pixel currently at old_value to new_value, matched by
+ * class value (not rendered color like RemapRequest) -- safe to use with
+ * the reserved Nodata pseudo-class (value 255), which /remap's color-based
+ * matching cannot distinguish from any real class that also renders white. */
+export interface SwapClassRequest {
+  old_value: number;
+  new_value: number;
+  dry_run: boolean;
+}
+
+export interface SwapClassResult {
+  affected_pixels: number;
+  applied: boolean;
+  qa_status: QaStatus;
 }
 
 export interface DeletedResult {
@@ -192,30 +231,6 @@ export interface DeletedResult {
 export interface HealthResult {
   status: "ok";
   version: string;
-}
-
-// ---------------------------------------------------------------------------
-// Shadow generation
-// ---------------------------------------------------------------------------
-
-export type ShadowMethodName =
-  | "percentile_arcsinh"
-  | "clahe"
-  | "hsv_threshold"
-  | "dem_hillshade"
-  | "custom";
-
-export interface ShadowGenerateRequest {
-  scene_id: string;
-  method: ShadowMethodName;
-  params: Record<string, unknown>;
-}
-
-export interface ShadowPreset {
-  id: string;
-  name: string;
-  method: ShadowMethodName;
-  params: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------

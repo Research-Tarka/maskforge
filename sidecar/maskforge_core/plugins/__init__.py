@@ -5,8 +5,7 @@ Plan section: "Système de plugins pour formats de fichiers custom (Protocol
 no concrete extra formats are implemented in V1. A plugin implements
 ``RasterReader`` and/or ``RasterWriter`` and registers itself via
 ``register_reader`` / ``register_writer`` keyed by a format name or file
-extension, mirroring the same registry pattern used by
-``maskforge_core.shadow_gen`` for custom shadow methods.
+extension.
 """
 
 from __future__ import annotations

@@ -27,15 +27,14 @@ import type {
   HealthResult,
   RemapRequest,
   RemapResult,
+  SwapClassRequest,
+  SwapClassResult,
   SaveConfig,
   SaveMaskResult,
   SceneEntry,
   SceneLayers,
   SceneStats,
   SessionState,
-  ShadowGenerateRequest,
-  ShadowPreset,
-  LayerData,
   StatsExportRequest,
   StatsExportResult,
   ToolRequest,
@@ -377,6 +376,23 @@ export function remapColor(
   );
 }
 
+export function swapClass(
+  sceneId: string,
+  swapRequest: SwapClassRequest,
+): Promise<SwapClassResult> {
+  return post<SwapClassResult>(
+    `/masks/${encodeURIComponent(sceneId)}/swap-class`,
+    swapRequest,
+  );
+}
+
+/** Copies an externally-produced inference class map onto the mask, filling
+ * only pixels still at NODATA_VALUE -- never overwrites existing manual
+ * work. 404s if the scene has no inference raster. */
+export function copyInferenceToMask(sceneId: string): Promise<ToolResult> {
+  return post<ToolResult>(`/masks/${encodeURIComponent(sceneId)}/copy-inference`);
+}
+
 // ---------------------------------------------------------------------------
 // Class palettes
 // ---------------------------------------------------------------------------
@@ -425,24 +441,6 @@ export function updateSession(
 
 export function deleteSession(id: string): Promise<DeletedResult> {
   return del<DeletedResult>(`/sessions/${encodeURIComponent(id)}`);
-}
-
-// ---------------------------------------------------------------------------
-// Shadow generation
-// ---------------------------------------------------------------------------
-
-export function generateShadow(
-  request: ShadowGenerateRequest,
-): Promise<LayerData> {
-  return post<LayerData>("/shadow/generate", request);
-}
-
-export function getShadowPresets(): Promise<ShadowPreset[]> {
-  return get<ShadowPreset[]>("/shadow/presets");
-}
-
-export function saveShadowPreset(preset: ShadowPreset): Promise<ShadowPreset> {
-  return post<ShadowPreset>("/shadow/presets", preset);
 }
 
 // ---------------------------------------------------------------------------

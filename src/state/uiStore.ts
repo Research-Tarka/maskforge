@@ -4,6 +4,16 @@
  * on the backend (SessionState.ui_state) is the longer-term home for
  * anything that should roam with a session, but keybindings and theme are
  * genuinely per-machine preferences so localStorage is the right place.
+ *
+ * Keybindings are matched by KeyboardEvent.key (the character actually
+ * produced), not .code (physical key position) -- .key already reflects
+ * the OS's active *software* keyboard layout regardless of what physical
+ * hardware is plugged in (e.g. a physically QWERTY keyboard remapped to
+ * type AZERTY at the OS level correctly produces "&" for key 1, no extra
+ * detection needed), which is what actually matters here: the shortcut
+ * should fire for the character the user is used to typing, not a fixed
+ * physical position that stays "&" even if they switch their OS layout to
+ * QWERTY.
  */
 
 import { create } from "zustand";
@@ -16,21 +26,26 @@ export type KeybindingAction =
   | "tool.bucket"
   | "tool.polygon"
   | "tool.autofill"
+  | "tool.fillAll"
   | "action.undo"
   | "action.redo"
   | "action.save"
+  | "action.flagScene"
   | "view.zoomIn"
   | "view.zoomOut"
   | "view.resetZoom"
   | "view.toggleContours"
   | "view.toggleDiff"
+  | "view.panLeft"
+  | "view.panRight"
+  | "view.panUp"
+  | "view.panDown"
   | "scene.next"
   | "scene.previous"
   | "panel.toggleTools"
   | "panel.toggleClasses"
   | "panel.toggleDiscovery"
   | "panel.toggleSaveConfig"
-  | "panel.toggleShadowGen"
   | "panel.toggleSession"
   | "panel.toggleQa"
   | "panel.toggleStats"
@@ -38,31 +53,41 @@ export type KeybindingAction =
   | "panel.toggleAutoSegment"
   | "panel.toggleLayout";
 
+// AZERTY defaults (this app's primary userbase) -- tools on the shifted
+// number-row punctuation ("&é"'(" == Shift+1..5 on a French keyboard,
+// produced as bare characters without needing an explicit Shift chord),
+// panels on the numeric keypad, a separate key cluster from the tool
+// shortcuts so the two groups never collide.
 export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   "tool.brush": "&",
   "tool.bucket": "É",
   "tool.polygon": "\"",
   "tool.autofill": "'",
+  "tool.fillAll": "(",
   "action.undo": "Ctrl+Z",
-  "action.redo": "Ctrl+Shift+Z",
+  "action.redo": "Ctrl+E",
   "action.save": "Ctrl+S",
+  "action.flagScene": "Ctrl+F",
   "view.zoomIn": "Ctrl+=",
   "view.zoomOut": "Ctrl+-",
-  "view.resetZoom": "Ctrl+0",
-  "view.toggleContours": "C",
-  "view.toggleDiff": "D",
-  "scene.next": "Ctrl+Right",
-  "scene.previous": "Ctrl+Left",
+  "view.resetZoom": "Ctrl+*",
+  "view.toggleContours": "W",
+  "view.toggleDiff": "X",
+  "view.panLeft": "ArrowLeft",
+  "view.panRight": "ArrowRight",
+  "view.panUp": "ArrowUp",
+  "view.panDown": "ArrowDown",
+  "scene.next": "Ctrl+D",
+  "scene.previous": "Ctrl+A",
   "panel.toggleTools": "1",
   "panel.toggleClasses": "2",
   "panel.toggleDiscovery": "3",
   "panel.toggleSaveConfig": "4",
-  "panel.toggleShadowGen": "5",
-  "panel.toggleSession": "6",
-  "panel.toggleQa": "7",
-  "panel.toggleStats": "8",
-  "panel.toggleKeybindings": "9",
-  "panel.toggleAutoSegment": "0",
+  "panel.toggleSession": "5",
+  "panel.toggleQa": "6",
+  "panel.toggleStats": "7",
+  "panel.toggleKeybindings": "8",
+  "panel.toggleAutoSegment": "9",
   "panel.toggleLayout": "L",
 };
 
@@ -71,21 +96,26 @@ export const KEYBINDING_LABELS: Record<KeybindingAction, string> = {
   "tool.bucket": "Bucket tool",
   "tool.polygon": "Polygon tool",
   "tool.autofill": "Auto-fill tool",
+  "tool.fillAll": "Fill entire scene",
   "action.undo": "Undo",
   "action.redo": "Redo",
   "action.save": "Save mask",
+  "action.flagScene": "Flag scene (skip)",
   "view.zoomIn": "Zoom in",
   "view.zoomOut": "Zoom out",
   "view.resetZoom": "Reset zoom",
   "view.toggleContours": "Toggle contours",
   "view.toggleDiff": "Toggle diff overlay",
+  "view.panLeft": "Pan left",
+  "view.panRight": "Pan right",
+  "view.panUp": "Pan up",
+  "view.panDown": "Pan down",
   "scene.next": "Next scene",
   "scene.previous": "Previous scene",
   "panel.toggleTools": "Toggle tool panel",
   "panel.toggleClasses": "Toggle class palette panel",
   "panel.toggleDiscovery": "Toggle discovery panel",
   "panel.toggleSaveConfig": "Toggle save panel",
-  "panel.toggleShadowGen": "Toggle shadow generation panel",
   "panel.toggleSession": "Toggle sessions panel",
   "panel.toggleQa": "Toggle QA panel",
   "panel.toggleStats": "Toggle stats panel",
@@ -99,7 +129,6 @@ export type PanelId =
   | "classes"
   | "discovery"
   | "saveConfig"
-  | "shadowGen"
   | "session"
   | "qa"
   | "stats"
@@ -112,7 +141,6 @@ const DEFAULT_PANEL_VISIBILITY: Record<PanelId, boolean> = {
   classes: true,
   discovery: false,
   saveConfig: false,
-  shadowGen: false,
   session: false,
   qa: true,
   stats: false,
@@ -122,7 +150,7 @@ const DEFAULT_PANEL_VISIBILITY: Record<PanelId, boolean> = {
 };
 
 const THEME_STORAGE_KEY = "maskforge.theme";
-const KEYBINDINGS_STORAGE_KEY = "maskforge.keybindings";
+const KEYBINDINGS_STORAGE_KEY = "maskforge.keybindings.v3";
 const PANELS_STORAGE_KEY = "maskforge.panelVisibility";
 const LAST_TOOL_STORAGE_KEY = "maskforge.lastTool";
 

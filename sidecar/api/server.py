@@ -33,6 +33,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from maskforge_core.plugins.inference_reader import register as _register_inference_reader
 from maskforge_core.plugins.zarr_reader import register as _register_zarr_reader
 
 from .routers import classes, masks, qa, scenes, sessions, tools
@@ -41,6 +42,7 @@ from .schemas import IPC_CONTRACT_VERSION, HealthResponse
 # Built-in format plugins, registered once at process import time (before any
 # request can reach raster_io.read_image_any's find_reader() dispatch).
 _register_zarr_reader()
+_register_inference_reader()
 
 API_PREFIX = "/api/v1"
 AUTH_TOKEN = os.environ.get("MASKFORGE_TOKEN") or secrets.token_urlsafe(32)

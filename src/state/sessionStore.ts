@@ -154,9 +154,26 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   setScenes: (scenes) => set({ scenes, selectedSceneIds: new Set<string>() }),
 
   updateScene: (sceneId, partial) =>
-    set((state) => ({
-      scenes: state.scenes.map((s) => (s.id === sceneId ? { ...s, ...partial } : s)),
-    })),
+    set((state) => {
+      const index = state.scenes.findIndex((s) => s.id === sceneId);
+      if (index === -1) return state;
+
+      const current = state.scenes[index];
+      const changed = (Object.keys(partial) as (keyof SceneEntry)[]).some((key) => current[key] !== partial[key]);
+      // Called on every brush stamp mid-drag (paintAt syncs qa_status from
+      // each /tool response) -- with a scene list in the thousands, mapping
+      // the whole array on every single stamp even when qa_status hasn't
+      // actually changed (the common case: it flips "todo" -> "in_progress"
+      // once per stroke, then every later stamp in the same drag is a
+      // no-op) made painting visibly laggy. Skipping the update (and the
+      // array copy) when nothing would actually change avoids that, and
+      // also avoids a wasted re-render of every scenes-list consumer.
+      if (!changed) return state;
+
+      const scenes = [...state.scenes];
+      scenes[index] = { ...current, ...partial };
+      return { scenes };
+    }),
 
   toggleSceneSelection: (sceneId) =>
     set((state) => {

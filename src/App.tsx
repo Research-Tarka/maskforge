@@ -15,7 +15,6 @@ import ClassPalettePanel from "@/components/panels/ClassPalettePanel";
 import ColorPickerPanel from "@/components/panels/ColorPickerPanel";
 import DiscoveryPanel from "@/components/panels/DiscoveryPanel";
 import SaveConfigPanel from "@/components/panels/SaveConfigPanel";
-import ShadowGenPanel from "@/components/panels/ShadowGenPanel";
 import SessionPanel from "@/components/panels/SessionPanel";
 import QAPanel from "@/components/panels/QAPanel";
 import StatsPanel from "@/components/panels/StatsPanel";
@@ -27,13 +26,15 @@ import { useSessionStore } from "@/state/sessionStore";
 import { useClassStore } from "@/state/classStore";
 import { useViewportStore } from "@/state/viewportStore";
 import { useToolStore } from "@/state/toolStore";
-import { useLayoutStore, layerLabel, rgbKeysForScene, visibleOrderedLayerKeys, MASK_KEY } from "@/state/layoutStore";
+import { useLayoutStore, layerLabel, viewKeysForScene, visibleOrderedLayerKeys, MASK_KEY } from "@/state/layoutStore";
 import { getPalettes, getScenes, getSceneLayers, getSessions, undoMask, redoMask } from "@/api/client";
 import type { SceneLayers } from "@/types/api";
 import "@/styles/app.css";
 
 const CANVAS_GAP_PX = 8;
 const MIN_PANEL_SIZE = 160;
+const KEYBOARD_PAN_STEP_PX = 60;
+const KEYBOARD_ZOOM_FACTOR = 1.1;
 
 export default function App() {
   const theme = useUiStore((s) => s.theme);
@@ -52,14 +53,18 @@ export default function App() {
   const flushAutosave = useSessionStore((s) => s.flushAutosave);
   const goToNextScene = useSessionStore((s) => s.goToNextScene);
   const goToPreviousScene = useSessionStore((s) => s.goToPreviousScene);
+  const updateScene = useSessionStore((s) => s.updateScene);
 
   const setPalettes = useClassStore((s) => s.setPalettes);
   const setActivePaletteId = useClassStore((s) => s.setActivePaletteId);
 
   const fitToSize = useViewportStore((s) => s.fitToSize);
+  const panBy = useViewportStore((s) => s.panBy);
+  const zoomAt = useViewportStore((s) => s.zoomAt);
 
   const setActiveTool = useToolStore((s) => s.setActiveTool);
   const setLastUsedTool = useUiStore((s) => s.setLastUsedTool);
+  const requestFillAll = useToolStore((s) => s.requestFillAll);
 
   const [sceneLayers, setSceneLayers] = useState<SceneLayers | null>(null);
   const canvasAreaRef = useRef<HTMLDivElement | null>(null);
@@ -80,7 +85,7 @@ export default function App() {
   // effect.
   const layoutVisibility = useLayoutStore((s) => s.visibility);
   const layoutOrder = useLayoutStore((s) => s.order);
-  const availableLayerKeys = activeScene ? [...rgbKeysForScene(activeScene), MASK_KEY] : [];
+  const availableLayerKeys = activeScene ? [...viewKeysForScene(activeScene), MASK_KEY] : [];
   const visibleLayerKeys = visibleOrderedLayerKeys(availableLayerKeys, layoutVisibility, layoutOrder);
   const panels = visibleLayerKeys.map((kind) => ({ kind, label: layerLabel(kind) }));
 
@@ -212,17 +217,34 @@ export default function App() {
   const contentHeight = firstRgbLayer?.height ?? sceneLayers?.mask?.height ?? 0;
   useEffect(() => {
     if (contentWidth <= 0 || contentHeight <= 0) return;
-    if (panelWidths[0] <= 0 || panelHeight <= 0) return;
-    fitToSize(contentWidth, contentHeight, panelWidths[0], panelHeight);
+    if (evenWidth <= 0 || panelHeight <= 0) return;
+    fitToSize(contentWidth, contentHeight, evenWidth, panelHeight);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeScene?.id, contentWidth, contentHeight, panelWidths[0], panelHeight]);
+  }, [activeScene?.id, contentWidth, contentHeight, evenWidth, panelHeight]);
 
-  // Global keyboard shortcuts: view toggles (contours, diff) and panel
-  // visibility toggles, mirroring the buttons in the Toolbar.
+  // Global keyboard shortcuts: tools, view toggles, panel visibility, scene
+  // navigation, panning. Matched by KeyboardEvent.key (the character
+  // actually produced), which already reflects the OS's active *software*
+  // keyboard layout regardless of physical hardware -- a physically QWERTY
+  // keyboard remapped to type AZERTY at the OS level correctly produces
+  // "&" for its "1" key with no extra handling needed here.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+
+      // Numpad +/- always zoom, like the mouse wheel -- not part of the
+      // rebindable keybindings system (matched by .code, not .key, since
+      // NumLock off can make the numpad's .key report navigation names
+      // like "PageUp" instead of "+"/"-", but .code stays "NumpadAdd"/
+      // "NumpadSubtract" either way).
+      if (e.code === "NumpadAdd" || e.code === "NumpadSubtract") {
+        e.preventDefault();
+        if (evenWidth <= 0 || panelHeight <= 0) return;
+        const focalPoint = { x: evenWidth / 2, y: panelHeight / 2 };
+        zoomAt(focalPoint, e.code === "NumpadAdd" ? KEYBOARD_ZOOM_FACTOR : 1 / KEYBOARD_ZOOM_FACTOR);
+        return;
+      }
 
       const parts: string[] = [];
       if (e.ctrlKey) parts.push("Ctrl");
@@ -232,55 +254,91 @@ export default function App() {
       if (key.length === 1) key = key.toUpperCase();
       parts.push(key);
       const chord = parts.join("+");
+      const is = (action: keyof typeof keybindings) => chord === keybindings[action];
 
-      if (chord === keybindings["tool.brush"]) {
+      if (is("tool.brush")) {
         setActiveTool("brush");
         setLastUsedTool("brush");
         return;
       }
-      if (chord === keybindings["tool.bucket"]) {
+      if (is("tool.bucket")) {
         setActiveTool("bucket");
         setLastUsedTool("bucket");
         return;
       }
-      if (chord === keybindings["tool.polygon"]) {
+      if (is("tool.polygon")) {
         setActiveTool("polygon");
         setLastUsedTool("polygon");
         return;
       }
-      if (chord === keybindings["tool.autofill"]) {
+      if (is("tool.autofill")) {
         setActiveTool("autofill");
         setLastUsedTool("autofill");
         return;
       }
+      if (is("tool.fillAll")) {
+        requestFillAll();
+        return;
+      }
 
-      if (chord === keybindings["view.toggleContours"]) return setShowContours((v) => !v);
-      if (chord === keybindings["view.toggleDiff"]) return setShowDiff((v) => !v);
-      if (chord === keybindings["panel.toggleTools"]) return togglePanel("tools");
-      if (chord === keybindings["panel.toggleClasses"]) return togglePanel("classes");
-      if (chord === keybindings["panel.toggleDiscovery"]) return togglePanel("discovery");
-      if (chord === keybindings["panel.toggleSaveConfig"]) return togglePanel("saveConfig");
-      if (chord === keybindings["panel.toggleShadowGen"]) return togglePanel("shadowGen");
-      if (chord === keybindings["panel.toggleSession"]) return togglePanel("session");
-      if (chord === keybindings["panel.toggleQa"]) return togglePanel("qa");
-      if (chord === keybindings["panel.toggleStats"]) return togglePanel("stats");
-      if (chord === keybindings["panel.toggleKeybindings"]) return togglePanel("keybindings");
-      if (chord === keybindings["panel.toggleAutoSegment"]) return togglePanel("autoSegment");
-      if (chord === keybindings["panel.toggleLayout"]) return togglePanel("layout");
+      if (is("view.toggleContours")) return setShowContours((v) => !v);
+      if (is("view.toggleDiff")) return setShowDiff((v) => !v);
+      if (is("panel.toggleTools")) return togglePanel("tools");
+      if (is("panel.toggleClasses")) return togglePanel("classes");
+      if (is("panel.toggleDiscovery")) return togglePanel("discovery");
+      if (is("panel.toggleSaveConfig")) return togglePanel("saveConfig");
+      if (is("panel.toggleSession")) return togglePanel("session");
+      if (is("panel.toggleQa")) return togglePanel("qa");
+      if (is("panel.toggleStats")) return togglePanel("stats");
+      if (is("panel.toggleKeybindings")) return togglePanel("keybindings");
+      if (is("panel.toggleAutoSegment")) return togglePanel("autoSegment");
+      if (is("panel.toggleLayout")) return togglePanel("layout");
 
-      if (chord === keybindings["action.undo"]) {
+      if (is("view.panLeft")) {
+        e.preventDefault();
+        return panBy(KEYBOARD_PAN_STEP_PX, 0);
+      }
+      if (is("view.panRight")) {
+        e.preventDefault();
+        return panBy(-KEYBOARD_PAN_STEP_PX, 0);
+      }
+      if (is("view.panUp")) {
+        e.preventDefault();
+        return panBy(0, KEYBOARD_PAN_STEP_PX);
+      }
+      if (is("view.panDown")) {
+        e.preventDefault();
+        return panBy(0, -KEYBOARD_PAN_STEP_PX);
+      }
+
+      if (is("view.zoomIn") || is("view.zoomOut")) {
+        e.preventDefault();
+        if (evenWidth <= 0 || panelHeight <= 0) return;
+        // No cursor position to zoom around (unlike the wheel handler) --
+        // the center of a canvas panel is the natural focal point for a
+        // keyboard-triggered zoom.
+        const focalPoint = { x: evenWidth / 2, y: panelHeight / 2 };
+        return zoomAt(focalPoint, is("view.zoomIn") ? KEYBOARD_ZOOM_FACTOR : 1 / KEYBOARD_ZOOM_FACTOR);
+      }
+      if (is("view.resetZoom")) {
+        e.preventDefault();
+        if (contentWidth <= 0 || contentHeight <= 0 || evenWidth <= 0 || panelHeight <= 0) return;
+        return fitToSize(contentWidth, contentHeight, evenWidth, panelHeight);
+      }
+
+      if (is("action.undo")) {
         e.preventDefault();
         if (!activeScene) return;
         void undoMask(activeScene.id).then(bumpSceneRefreshToken);
         return;
       }
-      if (chord === keybindings["action.redo"]) {
+      if (is("action.redo")) {
         e.preventDefault();
         if (!activeScene) return;
         void redoMask(activeScene.id).then(bumpSceneRefreshToken);
         return;
       }
-      if (chord === keybindings["action.save"]) {
+      if (is("action.save")) {
         // Ctrl+S defaults to the browser's "Save page" dialog -- always
         // preventDefault for this chord regardless of whether there's an
         // active session to flush.
@@ -288,8 +346,14 @@ export default function App() {
         if (session) void flushAutosave();
         return;
       }
-      if (chord === keybindings["scene.next"]) return goToNextScene();
-      if (chord === keybindings["scene.previous"]) return goToPreviousScene();
+      if (is("action.flagScene")) {
+        if (!activeScene) return;
+        updateScene(activeScene.id, { qa_status: "flagged" });
+        goToNextScene();
+        return;
+      }
+      if (is("scene.next")) return goToNextScene();
+      if (is("scene.previous")) return goToPreviousScene();
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -305,6 +369,15 @@ export default function App() {
     goToPreviousScene,
     setActiveTool,
     setLastUsedTool,
+    requestFillAll,
+    panBy,
+    updateScene,
+    zoomAt,
+    fitToSize,
+    evenWidth,
+    panelHeight,
+    contentWidth,
+    contentHeight,
   ]);
 
   // MultiPanelCanvas patches the mask canvas directly from each /tool
@@ -371,7 +444,6 @@ export default function App() {
           {panelVisibility.classes && <ColorPickerPanel />}
           {panelVisibility.discovery && <DiscoveryPanel />}
           {panelVisibility.saveConfig && <SaveConfigPanel />}
-          {panelVisibility.shadowGen && <ShadowGenPanel />}
           {panelVisibility.session && <SessionPanel />}
           {panelVisibility.qa && <QAPanel />}
           {panelVisibility.stats && <StatsPanel />}

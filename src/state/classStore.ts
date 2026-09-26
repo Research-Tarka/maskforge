@@ -8,6 +8,25 @@
 import { create } from "zustand";
 import type { ClassDef, ClassPalette } from "@/types/api";
 
+/** Synthetic pseudo-class exposed alongside every palette's real classes so
+ * the user can explicitly paint a pixel back to NODATA_VALUE (255, the
+ * sidecar's "never painted" sentinel — see raster_io.py) with the normal
+ * tools, instead of it only ever being an implicit initial state. Never
+ * persisted through the palette API: filtered out of every
+ * createPalette/updatePalette payload, and resolved here rather than looked
+ * up in activePalette().classes. White matches the existing render
+ * convention for an unpainted/nodata pixel (see _layer_from_mask_buffer /
+ * _tool_response_from_change in masks.py). */
+export const NODATA_CLASS_ID = "__nodata__";
+export const NODATA_VALUE = 255;
+export const NODATA_CLASS: ClassDef = {
+  id: NODATA_CLASS_ID,
+  name: "Nodata",
+  color: [255, 255, 255],
+  value: NODATA_VALUE,
+  active_by_default: true,
+};
+
 interface ClassState {
   palettes: ClassPalette[];
   activePaletteId: string | null;
@@ -82,9 +101,11 @@ export const useClassStore = create<ClassState>((set, get) => ({
   },
 
   selectedClass: () => {
-    const palette = get().activePalette();
     const { selectedClassId } = get();
-    if (!palette || !selectedClassId) return null;
+    if (!selectedClassId) return null;
+    if (selectedClassId === NODATA_CLASS_ID) return NODATA_CLASS;
+    const palette = get().activePalette();
+    if (!palette) return null;
     return palette.classes.find((c) => c.id === selectedClassId) ?? null;
   },
 
@@ -92,6 +113,7 @@ export const useClassStore = create<ClassState>((set, get) => ({
     const palette = get().activePalette();
     const { activeClassIds } = get();
     if (!palette) return [];
-    return palette.classes.filter((c) => activeClassIds.includes(c.id));
+    const real = palette.classes.filter((c) => activeClassIds.includes(c.id));
+    return [...real, NODATA_CLASS];
   },
 }));

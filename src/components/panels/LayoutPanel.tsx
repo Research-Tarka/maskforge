@@ -7,7 +7,7 @@
  */
 
 import { useSessionStore } from "@/state/sessionStore";
-import { useLayoutStore, layerLabel, orderLayerKeys, rgbKeysForScene, MASK_KEY } from "@/state/layoutStore";
+import { useLayoutStore, layerLabel, orderLayerKeys, viewKeysForScene, MASK_KEY } from "@/state/layoutStore";
 
 export default function LayoutPanel() {
   const activeScene = useSessionStore((s) => s.activeScene());
@@ -26,7 +26,7 @@ export default function LayoutPanel() {
   const moveUp = useLayoutStore((s) => s.moveUp);
   const moveDown = useLayoutStore((s) => s.moveDown);
 
-  const availableKeys = activeScene ? [...rgbKeysForScene(activeScene), MASK_KEY] : [];
+  const availableKeys = activeScene ? [...viewKeysForScene(activeScene), MASK_KEY] : [];
   const keys = orderLayerKeys(availableKeys, order);
   const isVisible = (key: string) => visibility[key] ?? true;
   const visibleCount = keys.filter((k) => isVisible(k)).length;

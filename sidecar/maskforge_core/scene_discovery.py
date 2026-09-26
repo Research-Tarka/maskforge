@@ -28,29 +28,46 @@ QaStatus = Literal["todo", "in_progress", "validated", "flagged"]
 @dataclass
 class ScanRule:
     name: str
-    raw_patterns: list[str] = field(default_factory=lambda: ["*raw*", "*RGB*"])
-    shadow_patterns: list[str] = field(default_factory=lambda: ["*shadow*", "*Shadow*"])
+    #: Filenames matching any of these are recognized as an RGB source image
+    #: for a plain-file scene -- replaces the old separate raw_patterns/
+    #: shadow_patterns fields in the UI (a scene has one RGB source file,
+    #: not a raw/shadow pair, in current usage). Internally still populates
+    #: SceneEntry.raw_path (the first RGB source file found), so downstream
+    #: code (composite fallback, SaveConfig.copy_raw, etc.) is unaffected.
+    rgb_patterns: list[str] = field(default_factory=lambda: ["*rgb*", "*RGB*"])
     mask_patterns: list[str] = field(default_factory=lambda: ["*mask*", "*Mask*"])
+    #: Filenames matching any of these (in a plain-file scan directory) are
+    #: recognized as an inference class-map raster produced by an external
+    #: ML pipeline -- see maskforge_core.plugins.inference_reader, which
+    #: reads the matched file's actual content (.npz or GeoTIFF).
+    inference_patterns: list[str] = field(default_factory=lambda: ["*class_map*", "*inference*"])
     max_depth: int = 5
     file_extensions: list[str] = field(default_factory=lambda: [".tif", ".tiff", ".png", ".jpg", ".jpeg"])
 
     def to_dict(self) -> dict:
         return {
             "name": self.name,
-            "raw_patterns": self.raw_patterns,
-            "shadow_patterns": self.shadow_patterns,
+            "rgb_patterns": self.rgb_patterns,
             "mask_patterns": self.mask_patterns,
+            "inference_patterns": self.inference_patterns,
             "max_depth": self.max_depth,
             "file_extensions": self.file_extensions,
         }
 
     @staticmethod
     def from_dict(d: dict) -> "ScanRule":
+        # Back-compat: an older persisted session may still have
+        # raw_patterns/shadow_patterns instead of rgb_patterns -- fold both
+        # into rgb_patterns rather than silently losing a user's existing
+        # customization on first load after the upgrade.
+        rgb_patterns = d.get("rgb_patterns")
+        if rgb_patterns is None:
+            rgb_patterns = list(d.get("raw_patterns", [])) + list(d.get("shadow_patterns", []))
         return ScanRule(
             name=d["name"],
-            raw_patterns=list(d.get("raw_patterns", [])),
-            shadow_patterns=list(d.get("shadow_patterns", [])),
+            rgb_patterns=list(rgb_patterns),
             mask_patterns=list(d.get("mask_patterns", [])),
+            inference_patterns=list(d.get("inference_patterns", ["*class_map*", "*inference*"])),
             max_depth=d.get("max_depth", 5),
             file_extensions=list(d.get("file_extensions", [])),
         )
@@ -72,12 +89,22 @@ class DiscoveryConfig:
     source_root: str
     scan_rule: ScanRule
     exclude_globs: list[str] = field(default_factory=list)
+    #: Root directory of an external ML pipeline's inference output, if the
+    #: user has one configured (e.g. the output_root a sliding-window
+    #: inference script writes ``<tile_id>/<sensor>/<scene_id>/class_map.npz``
+    #: under). Only meaningful for zarr-store scenes, whose inference output
+    #: is never inside the zarr store itself (a separate pipeline run
+    #: produces it) -- a plain-file scan finds its inference raster directly
+    #: alongside the scene via ScanRule.inference_patterns instead. None (the
+    #: default) means "no inference available" for every zarr scene.
+    inference_root: str | None = None
 
     def to_dict(self) -> dict:
         return {
             "source_root": self.source_root,
             "scan_rule": self.scan_rule.to_dict(),
             "exclude_globs": self.exclude_globs,
+            "inference_root": self.inference_root,
         }
 
     @staticmethod
@@ -86,6 +113,7 @@ class DiscoveryConfig:
             source_root=d["source_root"],
             scan_rule=ScanRule.from_dict(d["scan_rule"]),
             exclude_globs=list(d.get("exclude_globs", [])),
+            inference_root=d.get("inference_root"),
         )
 
 
@@ -99,6 +127,13 @@ class SceneEntry:
     detected_crs: str | None
     mode: SceneMode
     qa_status: QaStatus = "todo"
+    #: Path to an inference class-map raster produced by an external ML
+    #: pipeline, if one was found alongside this scene (``.npz`` or GeoTIFF
+    #: matching ``ScanRule.inference_patterns`` -- see
+    #: ``plugins.inference_reader``). ``None`` means no inference is
+    #: available for this scene; the frontend's "Copy inference to mask"
+    #: action stays disabled in that case.
+    inference_path: str | None = None
     #: Every RGB composite view this scene has, ``{view_name: composite_path}``
     #: (e.g. ``rgb_true_color``, ``rgb_natural_color``, ``rgb_color_infrared``,
     #: or any other ``rgb*`` array a store happens to have -- see
@@ -122,6 +157,7 @@ class SceneEntry:
             "mode": self.mode,
             "qa_status": self.qa_status,
             "rgb_composites": self.rgb_composites,
+            "inference_path": self.inference_path,
         }
 
 
@@ -134,15 +170,15 @@ def _is_excluded(path: Path, exclude_globs: list[str]) -> bool:
 
 
 def _scan_directory(dir_path: Path, rule: ScanRule, exclude_globs: list[str]) -> SceneEntry | None:
-    """Inspect a single directory (non-recursive) for raw/shadow/mask files
-    matching the scan rule. Returns a SceneEntry if a raw or mask file is
-    found, else None."""
+    """Inspect a single directory (non-recursive) for RGB/mask files matching
+    the scan rule. Returns a SceneEntry if an RGB or mask file is found, else
+    None."""
     if _is_excluded(dir_path, exclude_globs):
         return None
 
     raw_path: str | None = None
-    shadow_path: str | None = None
     mask_path: str | None = None
+    inference_path: str | None = None
 
     try:
         with os.scandir(dir_path) as it:
@@ -150,18 +186,27 @@ def _scan_directory(dir_path: Path, rule: ScanRule, exclude_globs: list[str]) ->
     except OSError:
         return None
 
+    # Inference rasters are matched by name regardless of file_extensions --
+    # they're typically .npz (not a "normal" scene image format the rest of
+    # ScanRule is tuned for) or a GeoTIFF, and matching purely by name marker
+    # here (rather than requiring the user to add .npz to file_extensions,
+    # which would also make discovery try to treat .npz files as RGB/mask
+    # candidates) keeps inference detection independent of that setting.
+    from .plugins.inference_reader import is_inference_path
+
     for entry in entries:
         p = Path(entry.path)
-        if p.suffix.lower() not in [ext.lower() for ext in rule.file_extensions]:
-            continue
         if _is_excluded(p, exclude_globs):
+            continue
+        if inference_path is None and is_inference_path(p) and _matches_any(entry.name, rule.inference_patterns):
+            inference_path = str(p)
+
+        if p.suffix.lower() not in [ext.lower() for ext in rule.file_extensions]:
             continue
         name = entry.name
         if mask_path is None and _matches_any(name, rule.mask_patterns):
             mask_path = str(p)
-        elif shadow_path is None and _matches_any(name, rule.shadow_patterns):
-            shadow_path = str(p)
-        elif raw_path is None and _matches_any(name, rule.raw_patterns):
+        elif raw_path is None and _matches_any(name, rule.rgb_patterns):
             raw_path = str(p)
 
     if raw_path is None and mask_path is None:
@@ -192,15 +237,36 @@ def _scan_directory(dir_path: Path, rule: ScanRule, exclude_globs: list[str]) ->
     return SceneEntry(
         id=dir_path.name,
         raw_path=raw_path,
-        shadow_path=shadow_path,
+        shadow_path=None,
         mask_path=mask_path,
         detected_resolution=detected_resolution,
         detected_crs=detected_crs,
         mode=mode,
+        inference_path=inference_path,
     )
 
 
-def _scan_zarr_store(store_path: Path, rule: ScanRule, exclude_globs: list[str]) -> list[SceneEntry]:
+def _resolve_inference_path(inference_root: str | None, tile_id: str, sensor: str, scene_id: str) -> str | None:
+    """Conventional path for one scene's externally-produced inference class
+    map, mirroring the pipeline's own ``scene_output_paths()`` layout
+    (``<output_root>/<tile_id>/<sensor>/<scene_id>/class_map.npz``). Returns
+    ``None`` (no inference available) when ``inference_root`` is unset, or
+    when neither the ``.npz`` nor a GeoTIFF fallback exists on disk."""
+    if not inference_root:
+        return None
+    scene_dir = Path(inference_root) / tile_id / sensor / scene_id
+    npz_path = scene_dir / "class_map.npz"
+    if npz_path.is_file():
+        return str(npz_path)
+    tif_path = scene_dir / "class_map.tif"
+    if tif_path.is_file():
+        return str(tif_path)
+    return None
+
+
+def _scan_zarr_store(
+    store_path: Path, rule: ScanRule, exclude_globs: list[str], inference_root: str | None = None
+) -> list[SceneEntry]:
     """Enumerate every (sensor, scene) pair inside one ``.zarr`` store as its
     own :class:`SceneEntry`, addressed via the composite path scheme from
     ``maskforge_core.plugins.zarr_reader`` (one physical store holds many
@@ -269,6 +335,7 @@ def _scan_zarr_store(store_path: Path, rule: ScanRule, exclude_globs: list[str])
                     detected_crs=crs_wkt,
                     mode="annotate",
                     rgb_composites=rgb_composites,
+                    inference_path=_resolve_inference_path(inference_root, store_stem, sensor, scene_id),
                 )
             )
 
@@ -303,7 +370,9 @@ def _iter_dirs(root: Path, max_depth: int, exclude_globs: list[str]):
     yield from _walk(root, 0)
 
 
-def _scan_item(dir_path: Path, rule: ScanRule, exclude_globs: list[str]) -> list[SceneEntry]:
+def _scan_item(
+    dir_path: Path, rule: ScanRule, exclude_globs: list[str], inference_root: str | None = None
+) -> list[SceneEntry]:
     """Dispatch one directory yielded by ``_iter_dirs`` to the right scanner:
     a ``.zarr`` store (when the rule opts in via ``accepts_zarr_stores``)
     expands to zero or more scenes; any other directory is a single-scene
@@ -311,7 +380,7 @@ def _scan_item(dir_path: Path, rule: ScanRule, exclude_globs: list[str]) -> list
     if dir_path.suffix.lower() == ".zarr":
         if not rule.accepts_zarr_stores():
             return []
-        return _scan_zarr_store(dir_path, rule, exclude_globs)
+        return _scan_zarr_store(dir_path, rule, exclude_globs, inference_root)
     entry = _scan_directory(dir_path, rule, exclude_globs)
     return [entry] if entry is not None else []
 
@@ -337,7 +406,8 @@ def discover_scenes(config: DiscoveryConfig, max_workers: int = 8, progress_cb=N
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(_scan_item, d, config.scan_rule, config.exclude_globs): d for d in dirs
+            executor.submit(_scan_item, d, config.scan_rule, config.exclude_globs, config.inference_root): d
+            for d in dirs
         }
         for future in futures:
             entries = future.result()

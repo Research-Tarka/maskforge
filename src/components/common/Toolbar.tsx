@@ -10,13 +10,10 @@ const PANEL_TOGGLES: { id: PanelId; label: string; disabled?: boolean }[] = [
   { id: "classes", label: "Classes" },
   { id: "discovery", label: "Discovery" },
   { id: "saveConfig", label: "Save" },
-  // Shadow generation and keyboard shortcuts are parked for now — greyed
-  // out rather than removed so the panels/state stay intact for later.
-  { id: "shadowGen", label: "Shadow", disabled: true },
   { id: "session", label: "Sessions" },
   { id: "qa", label: "QA" },
   { id: "stats", label: "Stats" },
-  { id: "keybindings", label: "Shortcuts", disabled: true },
+  { id: "keybindings", label: "Shortcuts" },
   { id: "autoSegment", label: "Auto-segment" },
   { id: "layout", label: "Layout" },
 ];

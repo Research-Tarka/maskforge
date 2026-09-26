@@ -77,6 +77,7 @@ export default function MultiPanelCanvas({
   const selectedClass = useClassStore((s) => s.selectedClass());
 
   const activeScene = useSessionStore((s) => s.activeScene());
+  const updateScene = useSessionStore((s) => s.updateScene);
 
   const assignMode = useAutoSegmentStore((s) => s.assignMode);
   const assignClassValue = useAutoSegmentStore((s) => s.assignClassValue);
@@ -183,6 +184,7 @@ export default function MultiPanelCanvas({
           });
           setPaintError(null);
           applyPatch(result.png_base64, result.bbox);
+          updateScene(activeScene.id, { qa_status: result.qa_status });
           if (!continueStroke) void onStrokeEnd?.();
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -210,6 +212,7 @@ export default function MultiPanelCanvas({
         });
         setPaintError(null);
         applyPatch(result.png_base64, result.bbox);
+        updateScene(activeScene.id, { qa_status: result.qa_status });
         // Skip the network refresh (onStrokeEnd) for every brush stamp --
         // the canvas patch above already made the change visible instantly,
         // and handlePointerUp does the one refresh needed once the whole
@@ -226,7 +229,7 @@ export default function MultiPanelCanvas({
         setPaintError(message);
       }
     },
-    [activeScene, activeTool, brushSize, tolerance, selectedClass, toScreenToWorld, applyPatch, onStrokeEnd],
+    [activeScene, activeTool, brushSize, tolerance, selectedClass, toScreenToWorld, applyPatch, onStrokeEnd, updateScene],
   );
 
   const fillPolygon = useCallback(
@@ -240,6 +243,7 @@ export default function MultiPanelCanvas({
         });
         setPaintError(null);
         applyPatch(result.png_base64, result.bbox);
+        updateScene(activeScene.id, { qa_status: result.qa_status });
         void onStrokeEnd?.();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -247,7 +251,7 @@ export default function MultiPanelCanvas({
         setPaintError(message);
       }
     },
-    [activeScene, selectedClass, applyPatch, onStrokeEnd],
+    [activeScene, selectedClass, applyPatch, onStrokeEnd, updateScene],
   );
 
   const assignComponentAt = useCallback(
@@ -261,12 +265,13 @@ export default function MultiPanelCanvas({
           class_value: assignClassValue,
         });
         applyPatch(result.png_base64, result.bbox);
+        updateScene(activeScene.id, { qa_status: result.qa_status });
         void onStrokeEnd?.();
       } catch {
         // Surfaced via the auto-segment panel's own error state.
       }
     },
-    [activeScene, assignClassValue, toScreenToWorld, applyPatch, onStrokeEnd],
+    [activeScene, assignClassValue, toScreenToWorld, applyPatch, onStrokeEnd, updateScene],
   );
 
   const closePolygon = useCallback(() => {

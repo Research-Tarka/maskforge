@@ -41,6 +41,15 @@ interface ToolState {
   brushSize: number;
   tolerance: number;
 
+  // A tick counter (not a boolean) bumped by App.tsx's "Fill entire scene"
+  // keyboard shortcut so ToolPanel can open its own confirm dialog in
+  // response -- routed through a store rather than calling ToolPanel's
+  // handler directly, since that handler owns local confirm-dialog state
+  // App.tsx has no business reaching into. A counter (not a boolean flag)
+  // so two shortcut presses in a row while the dialog is already open each
+  // still produce a distinct change for the effect to react to.
+  fillAllRequestToken: number;
+
   undoStack: MaskDiff[];
   redoStack: MaskDiff[];
   memoryCapBytes: number;
@@ -50,6 +59,7 @@ interface ToolState {
   setBrushSize: (size: number) => void;
   setTolerance: (tolerance: number) => void;
   setMemoryCapBytes: (cap: number) => void;
+  requestFillAll: () => void;
 
   pushDiff: (diff: MaskDiff) => void;
   undo: () => MaskDiff | null;
@@ -76,6 +86,7 @@ export const useToolStore = create<ToolState>((set, get) => ({
   activeTool: "brush",
   brushSize: 24,
   tolerance: 16,
+  fillAllRequestToken: 0,
 
   undoStack: [],
   redoStack: [],
@@ -90,6 +101,7 @@ export const useToolStore = create<ToolState>((set, get) => ({
     const { stack, usedBytes } = evictToFit(undoStack, cap, 0);
     set({ memoryCapBytes: cap, undoStack: stack, usedBytes });
   },
+  requestFillAll: () => set((state) => ({ fillAllRequestToken: state.fillAllRequestToken + 1 })),
 
   pushDiff: (diff) => {
     const { undoStack, memoryCapBytes } = get();

@@ -31,8 +31,7 @@ def scene_tree(tmp_path: Path) -> Path:
 def _default_rule() -> ScanRule:
     return ScanRule(
         name="generic",
-        raw_patterns=["raw*"],
-        shadow_patterns=["shadow*"],
+        rgb_patterns=["raw*", "shadow*"],
         mask_patterns=["mask*"],
         max_depth=6,
         file_extensions=[".tif"],
@@ -48,13 +47,15 @@ class TestDiscoverScenes:
         assert "sceneA2" in ids
         assert "sceneB1" in ids
 
-    def test_detects_raw_shadow_mask_paths(self, scene_tree: Path):
+    def test_detects_rgb_mask_paths(self, scene_tree: Path):
         cfg = DiscoveryConfig(source_root=str(scene_tree), scan_rule=_default_rule())
         entries = {e.id: e for e in discover_scenes(cfg)}
 
         a1 = entries["sceneA1"]
-        assert a1.raw_path is not None and "raw_image" in a1.raw_path
-        assert a1.shadow_path is not None and "shadow_image" in a1.shadow_path
+        # rgb_patterns matches both raw_image.tif and shadow_image.tif here
+        # (there's no separate raw/shadow distinction any more) -- one of
+        # them is picked as the scene's single RGB source file.
+        assert a1.raw_path is not None
         assert a1.mask_path is None
         assert a1.mode == "annotate"
 
@@ -91,15 +92,14 @@ class TestDiscoverScenes:
         assert "sceneA1" not in ids
 
     def test_configurable_patterns_not_hardcoded(self, tmp_path: Path):
-        # A totally different naming convention than raw/shadow/mask should
-        # still work purely via configured glob patterns.
+        # A totally different naming convention than rgb/mask should still
+        # work purely via configured glob patterns.
         root = tmp_path / "custom"
         _touch(root / "sceneX" / "input_band.tif")
         _touch(root / "sceneX" / "label_annotation.tif")
         rule = ScanRule(
             name="custom",
-            raw_patterns=["input_*"],
-            shadow_patterns=[],
+            rgb_patterns=["input_*"],
             mask_patterns=["label_*"],
             max_depth=3,
             file_extensions=[".tif"],
@@ -115,7 +115,23 @@ class TestDiscoverScenes:
         d = rule.to_dict()
         back = ScanRule.from_dict(d)
         assert back.name == rule.name
-        assert back.raw_patterns == rule.raw_patterns
+        assert back.rgb_patterns == rule.rgb_patterns
+
+    def test_scan_rule_from_dict_migrates_old_raw_shadow_patterns(self):
+        # An older persisted session may still have raw_patterns/
+        # shadow_patterns instead of rgb_patterns -- both must fold into
+        # rgb_patterns rather than silently dropping the user's existing
+        # customization on first load after the upgrade.
+        d = {
+            "name": "legacy",
+            "raw_patterns": ["raw*"],
+            "shadow_patterns": ["shadow*"],
+            "mask_patterns": ["mask*"],
+            "max_depth": 5,
+            "file_extensions": [".tif"],
+        }
+        rule = ScanRule.from_dict(d)
+        assert set(rule.rgb_patterns) == {"raw*", "shadow*"}
 
     def test_discovery_config_round_trip_dict(self, scene_tree: Path):
         cfg = DiscoveryConfig(source_root=str(scene_tree), scan_rule=_default_rule())

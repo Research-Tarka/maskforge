@@ -23,12 +23,26 @@ const MASK_KEY = "mask";
  * control look permanently disabled. */
 export function rgbKeysForScene(scene: SceneEntry | null): string[] {
   if (!scene) return [];
-  const composites = Object.keys(scene.rgb_composites);
+  const composites = Object.keys(scene.rgb_composites ?? {});
   if (composites.length > 0) return composites;
   const fallback: string[] = [];
   if (scene.raw_path) fallback.push("rgb_true_color");
   if (scene.shadow_path) fallback.push("rgb_true_color_shadow");
   return fallback;
+}
+
+const INFERENCE_KEY = "inference";
+
+/** Every displayable view key for a scene: its RGB composites plus, if
+ * present, the reserved "inference" key for an externally-produced class
+ * map (see SceneEntry.inference_path). Used by the layout panel/canvas grid,
+ * which show any displayable image -- unlike rgbKeysForScene, which stays
+ * RGB-only since it also feeds the auto-segment source picker (clustering
+ * on an already-classified inference raster as a "source image" wouldn't
+ * make sense there). */
+export function viewKeysForScene(scene: SceneEntry | null): string[] {
+  const keys = rgbKeysForScene(scene);
+  return scene?.inference_path ? [...keys, INFERENCE_KEY] : keys;
 }
 
 /** Preferred order for the views the pipeline currently produces; any other
@@ -42,6 +56,7 @@ const HUMAN_LABELS: Record<string, string> = {
   rgb_natural_color: "Natural color",
   rgb_color_infrared: "Color infrared",
   mask: "Mask",
+  inference: "Inference",
 };
 
 /** A readable label for a layer key -- falls back to a light humanization of

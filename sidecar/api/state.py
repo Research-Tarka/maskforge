@@ -95,11 +95,6 @@ class AppState:
         self.scenes_by_session: dict[str, list[SceneEntry]] = {}
         self.scenes_by_id: dict[str, SceneEntry] = {}
         self.mask_buffers: dict[str, MaskBuffer] = {}
-        self.shadow_presets: dict[str, dict[str, Any]] = {}
-
-        from maskforge_core.shadow_gen import list_presets
-
-        self.shadow_presets.update(list_presets())
 
     def set_scenes(self, session_id: str, scenes: list[SceneEntry]) -> None:
         with self._lock:
@@ -129,12 +124,21 @@ class AppState:
 
     def get_active_save_config(self):
         """Best-effort lookup of "the" active SaveConfig, mirroring
-        get_active_palette's scan-every-open-session approach (there is no
-        real per-scene session scoping yet). Used to locate a mask that was
-        already saved to an output_root separate from the scene's own
+        get_active_palette's scan-every-persisted-session approach (there is
+        no real per-scene session scoping yet). Used to locate a mask that
+        was already saved to an output_root separate from the scene's own
         discovery source_root -- discovery never sees such a mask (it only
         scans source_root), so SceneEntry.mask_path stays None for it even
         though a file exists on disk.
+
+        Scans every session persisted on disk (session_store.list_all()),
+        not just ones already registered in scenes_by_session -- a fresh
+        sidecar process has an empty scenes_by_session until some scene
+        discovery has actually run once, which would otherwise make the
+        very first /scenes or /scenes/discover call after startup (the
+        common case: the app just booted and is loading the user's most
+        recent session) miss every previously-saved mask on disk, since
+        there'd be no session yet for this to find a save_config through.
 
         Returns a maskforge_core.session.SaveConfig (not the dict that
         SessionState.save_config actually stores it as -- session.py's
@@ -142,22 +146,26 @@ class AppState:
         api.schemas' Pydantic model of a similar name)."""
         from maskforge_core.session import SaveConfig as CoreSaveConfig
 
-        for sid in list(self.scenes_by_session.keys()):
-            session = self.session_store.get(sid)
-            if session is not None and session.save_config:
+        for session in self.session_store.list_all():
+            if session.save_config:
                 return CoreSaveConfig.from_dict(session.save_config)
         return None
 
     def get_active_palette(self):
         """Best-effort lookup of "the" active class palette: scans every
-        open session for one with an active_palette_id that still resolves.
-        There is no real per-scene palette scoping yet (see save_mask's own
-        note historically) -- this just centralizes the same lookup that
-        used to be duplicated inline in save_mask and the live mask-layer
-        renderer."""
-        for sid in list(self.scenes_by_session.keys()):
-            session = self.session_store.get(sid)
-            if session is not None and session.active_palette_id:
+        session persisted on disk for one with an active_palette_id that
+        still resolves. There is no real per-scene palette scoping yet (see
+        save_mask's own note historically) -- this just centralizes the
+        same lookup that used to be duplicated inline in save_mask and the
+        live mask-layer renderer.
+
+        Scans session_store.list_all() (every session on disk), not just
+        scenes_by_session's keys -- see get_active_save_config's docstring
+        for why: a fresh process would otherwise render the wrong (empty)
+        palette for the first scene layer requested right after startup,
+        before any discovery has registered a session here yet."""
+        for session in self.session_store.list_all():
+            if session.active_palette_id:
                 palette = self.palette_store.get(session.active_palette_id)
                 if palette is not None:
                     return palette

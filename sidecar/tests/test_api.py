@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -100,8 +101,7 @@ class TestSceneDiscoveryEndToEnd:
             "source_root": str(scene_dir),
             "scan_rule": {
                 "name": "test",
-                "raw_patterns": ["raw*"],
-                "shadow_patterns": ["shadow*"],
+                "rgb_patterns": ["raw*", "shadow*"],
                 "mask_patterns": ["mask*"],
                 "max_depth": 3,
                 "file_extensions": [".tif"],
@@ -121,8 +121,7 @@ class TestSceneDiscoveryEndToEnd:
             "source_root": str(scene_dir),
             "scan_rule": {
                 "name": "test",
-                "raw_patterns": ["raw*"],
-                "shadow_patterns": [],
+                "rgb_patterns": ["raw*"],
                 "mask_patterns": [],
                 "max_depth": 3,
                 "file_extensions": [".tif"],
@@ -158,8 +157,7 @@ class TestPaintSaveReload:
             "source_root": str(scene_dir),
             "scan_rule": {
                 "name": "test",
-                "raw_patterns": ["raw*"],
-                "shadow_patterns": [],
+                "rgb_patterns": ["raw*"],
                 "mask_patterns": [],
                 "max_depth": 3,
                 "file_extensions": [".tif"],
@@ -182,7 +180,7 @@ class TestPaintSaveReload:
         discover_body = {
             "source_root": str(scene_dir),
             "scan_rule": {
-                "name": "test", "raw_patterns": ["raw*"], "shadow_patterns": [],
+                "name": "test", "rgb_patterns": ["raw*"],
                 "mask_patterns": [], "max_depth": 3, "file_extensions": [".tif"],
             },
             "exclude_globs": [],
@@ -220,8 +218,7 @@ class TestPaintSaveReload:
             "source_root": str(scene_dir),
             "scan_rule": {
                 "name": "test",
-                "raw_patterns": ["raw*"],
-                "shadow_patterns": [],
+                "rgb_patterns": ["raw*"],
                 "mask_patterns": [],
                 "max_depth": 3,
                 "file_extensions": [".tif"],
@@ -250,8 +247,7 @@ class TestPaintSaveReload:
             "source_root": str(scene_dir),
             "scan_rule": {
                 "name": "test",
-                "raw_patterns": ["raw*"],
-                "shadow_patterns": [],
+                "rgb_patterns": ["raw*"],
                 "mask_patterns": [],
                 "max_depth": 3,
                 "file_extensions": [".tif"],
@@ -312,14 +308,23 @@ class TestPaintSaveReload:
         discover_body = {
             "source_root": str(root),
             "scan_rule": {
-                "name": "test", "raw_patterns": ["raw*"], "shadow_patterns": ["shadow*"],
+                "name": "test", "rgb_patterns": ["raw*"],
                 "mask_patterns": [], "max_depth": 3, "file_extensions": [".tif"],
             },
             "exclude_globs": [],
         }
         scenes = client.post(f"{API}/scenes/discover", json=discover_body).json()
         scene_id = scenes[0]["id"]
-        assert scenes[0]["shadow_path"] is not None
+
+        # shadow_path is no longer populated by filename-pattern discovery
+        # (there's no separate raw/shadow distinction in the UI any more --
+        # see ScanRule.rgb_patterns) but the field, and copy_shadow's file
+        # copy behavior on save, still exist for a zarr-store scene, whose
+        # rgb_composites can include an "rgb_true_color_shadow" view. Set it
+        # directly on the registered scene to exercise that path here.
+        core_scene = api_state.get_state().get_scene(scene_id)
+        core_scene.shadow_path = str(scene / "shadow_image.tif")
+        api_state.get_state().register_scene(core_scene)
 
         client.post(
             f"{API}/masks/{scene_id}/tool",
@@ -356,8 +361,7 @@ class TestPaintSaveReload:
             "source_root": str(scene_dir),
             "scan_rule": {
                 "name": "test",
-                "raw_patterns": ["raw*"],
-                "shadow_patterns": [],
+                "rgb_patterns": ["raw*"],
                 "mask_patterns": [],
                 "max_depth": 3,
                 "file_extensions": [".tif"],
@@ -438,7 +442,7 @@ class TestPaintSaveReload:
         discover_body = {
             "source_root": str(root),
             "scan_rule": {
-                "name": "test", "raw_patterns": ["raw*"], "shadow_patterns": [], "mask_patterns": [],
+                "name": "test", "rgb_patterns": ["raw*"], "mask_patterns": [],
                 "max_depth": 3, "file_extensions": [".tif"],
             },
             "exclude_globs": [],
@@ -484,7 +488,7 @@ class TestPaintSaveReload:
         discover_body = {
             "source_root": str(scene_dir),
             "scan_rule": {
-                "name": "test", "raw_patterns": ["raw*"], "shadow_patterns": [],
+                "name": "test", "rgb_patterns": ["raw*"],
                 "mask_patterns": [], "max_depth": 3, "file_extensions": [".tif"],
             },
             "exclude_globs": [],
@@ -564,7 +568,7 @@ class TestAutoFillFillsAllEmptyPixels:
         discover_body = {
             "source_root": str(root),
             "scan_rule": {
-                "name": "test", "raw_patterns": ["raw*"], "shadow_patterns": [],
+                "name": "test", "rgb_patterns": ["raw*"],
                 "mask_patterns": [], "max_depth": 3, "file_extensions": [".tif"],
             },
             "exclude_globs": [],
@@ -653,7 +657,7 @@ class TestAutoSegmentEndpoints:
         discover_body = {
             "source_root": str(root),
             "scan_rule": {
-                "name": "test", "raw_patterns": ["raw*"], "shadow_patterns": [],
+                "name": "test", "rgb_patterns": ["raw*"],
                 "mask_patterns": [], "max_depth": 3, "file_extensions": [".tif"],
             },
             "exclude_globs": [],
@@ -714,7 +718,7 @@ class TestAutoSegmentEndpoints:
         discover_body = {
             "source_root": str(root),
             "scan_rule": {
-                "name": "test", "raw_patterns": ["raw*"], "shadow_patterns": [],
+                "name": "test", "rgb_patterns": ["raw*"],
                 "mask_patterns": [], "max_depth": 3, "file_extensions": [".tif"],
             },
             "exclude_globs": [],
@@ -777,7 +781,7 @@ class TestAutoSegmentEndpoints:
         discover_body = {
             "source_root": str(root),
             "scan_rule": {
-                "name": "test", "raw_patterns": ["raw*"], "shadow_patterns": [],
+                "name": "test", "rgb_patterns": ["raw*"],
                 "mask_patterns": [], "max_depth": 3, "file_extensions": [".tif"],
             },
             "exclude_globs": [],
@@ -826,7 +830,7 @@ class TestAutoSegmentEndpoints:
         discover_body = {
             "source_root": str(scene_dir),
             "scan_rule": {
-                "name": "test", "raw_patterns": ["raw*"], "shadow_patterns": [],
+                "name": "test", "rgb_patterns": ["raw*"],
                 "mask_patterns": [], "max_depth": 3, "file_extensions": [".tif"],
             },
             "exclude_globs": [],
@@ -880,8 +884,7 @@ class TestSessionsEndpoints:
                 "source_root": "C:/data",
                 "scan_rule": {
                     "name": "default",
-                    "raw_patterns": ["raw*"],
-                    "shadow_patterns": ["shadow*"],
+                    "rgb_patterns": ["raw*", "shadow*"],
                     "mask_patterns": ["mask*"],
                     "max_depth": 5,
                     "file_extensions": [".tif"],
@@ -927,6 +930,58 @@ class TestSessionsEndpoints:
         resp = client.get(f"{API}/sessions/does-not-exist")
         assert resp.status_code == 404
 
+    def test_list_sessions_migrates_legacy_raw_shadow_scan_rule(self, client: TestClient):
+        """A session saved before the raw_patterns/shadow_patterns ->
+        rgb_patterns rename (and missing inference_patterns/inference_root
+        entirely) must not crash GET /sessions -- this exact shape is what a
+        real pre-upgrade ~/.maskforge/sessions/<id>.json file looks like,
+        and ScanRule's extra="forbid" would otherwise reject it outright."""
+        legacy = {
+            "schema_version": 1,
+            "id": "legacy-1",
+            "name": "Legacy Session",
+            "discovery": {
+                "source_root": "D:\\data\\tiles",
+                "scan_rule": {
+                    "name": "default",
+                    "raw_patterns": ["*raw*.tif"],
+                    "shadow_patterns": ["*shadow*.tif"],
+                    "mask_patterns": ["*mask*.tif"],
+                    "max_depth": 5,
+                    "file_extensions": [".tif", ".zarr"],
+                },
+                "exclude_globs": [],
+            },
+            "active_palette_id": "",
+            "active_class_ids": [],
+            "save_config": {
+                "output_format": "geotiff_rgba",
+                "output_root": "",
+                "folder_structure_template": "{scene_id}/mask.tif",
+                "copy_raw": False,
+                "copy_shadow": False,
+                "preserve_georef": True,
+                "resolution_mode": "native",
+                "target_resolution": None,
+                "compress": "LZW",
+            },
+            "ui_state": {},
+            "qa_state": {},
+            "recent_sessions": [],
+        }
+        state = api_state.get_state()
+        (state.session_store.dir / "legacy-1.json").write_text(json.dumps(legacy), encoding="utf-8")
+
+        list_resp = client.get(f"{API}/sessions")
+        assert list_resp.status_code == 200
+        session = next(s for s in list_resp.json() if s["id"] == "legacy-1")
+        rgb_patterns = session["discovery"]["scan_rule"]["rgb_patterns"]
+        assert set(rgb_patterns) == {"*raw*.tif", "*shadow*.tif"}
+        assert session["discovery"]["inference_root"] is None
+
+        get_resp = client.get(f"{API}/sessions/legacy-1")
+        assert get_resp.status_code == 200
+
 
 class TestRemapEndpoint:
     def test_remap_dry_run_then_apply(self, client: TestClient, scene_dir: Path):
@@ -934,8 +989,7 @@ class TestRemapEndpoint:
             "source_root": str(scene_dir),
             "scan_rule": {
                 "name": "test",
-                "raw_patterns": ["raw*"],
-                "shadow_patterns": [],
+                "rgb_patterns": ["raw*"],
                 "mask_patterns": [],
                 "max_depth": 3,
                 "file_extensions": [".tif"],
@@ -969,21 +1023,73 @@ class TestRemapEndpoint:
         assert apply_resp.json()["applied"] is True
 
 
-class TestShadowEndpoints:
-    def test_list_presets_includes_builtin(self, client: TestClient):
-        resp = client.get(f"{API}/shadow/presets")
-        assert resp.status_code == 200
-        names = {p["name"] for p in resp.json()}
-        assert "Shadow" in names
-        assert "Brut" in names
+class TestCopyInferenceEndpoint:
+    def test_copy_inference_fills_only_nodata(self, client: TestClient, scene_dir: Path):
+        scene_path = scene_dir / "sceneA"
+        class_map = np.full((32, 32), 5, dtype=np.uint8)
+        np.savez_compressed(
+            scene_path / "class_map.npz",
+            class_map=class_map,
+            transform=np.array([10.0, 0.0, 100000.0, 0.0, -10.0, 5000000.0], dtype=np.float64),
+            crs_wkt=np.array("EPSG:32633"),
+            nodata=np.array(255, dtype=np.uint8),
+        )
 
-    def test_generate_shadow_for_scene(self, client: TestClient, scene_dir: Path):
         discover_body = {
             "source_root": str(scene_dir),
             "scan_rule": {
                 "name": "test",
-                "raw_patterns": ["raw*"],
-                "shadow_patterns": [],
+                "rgb_patterns": ["raw*"],
+                "mask_patterns": [],
+                "max_depth": 3,
+                "file_extensions": [".tif"],
+            },
+            "exclude_globs": [],
+        }
+        scenes = client.post(f"{API}/scenes/discover", json=discover_body).json()
+        scene_id = scenes[0]["id"]
+        assert scenes[0]["inference_path"] is not None
+
+        # Paint one pixel by hand first -- copy-inference must not touch it.
+        client.post(
+            f"{API}/masks/{scene_id}/tool",
+            json={"tool": "brush", "params": {"x": 0, "y": 0, "radius": 0}, "class_value": 9},
+        )
+
+        resp = client.post(f"{API}/masks/{scene_id}/copy-inference")
+        assert resp.status_code == 200
+        result = resp.json()
+        # Every pixel except the hand-painted one gets filled from the
+        # inference class map.
+        assert result["changed_pixels"] == 32 * 32 - 1
+
+    def test_copy_inference_404_when_no_inference(self, client: TestClient, scene_dir: Path):
+        discover_body = {
+            "source_root": str(scene_dir),
+            "scan_rule": {
+                "name": "test",
+                "rgb_patterns": ["raw*"],
+                "mask_patterns": [],
+                "max_depth": 3,
+                "file_extensions": [".tif"],
+            },
+            "exclude_globs": [],
+        }
+        scenes = client.post(f"{API}/scenes/discover", json=discover_body).json()
+        scene_id = scenes[0]["id"]
+        assert scenes[0]["inference_path"] is None
+
+        resp = client.post(f"{API}/masks/{scene_id}/copy-inference")
+        assert resp.status_code == 404
+
+
+class TestSwapClassEndpoint:
+    def test_swap_class_dry_run_then_apply(self, client: TestClient, scene_dir: Path):
+        discover_body = {
+            "source_root": str(scene_dir),
+            "scan_rule": {
+                "name": "test",
+                "rgb_patterns": ["raw*"],
                 "mask_patterns": [],
                 "max_depth": 3,
                 "file_extensions": [".tif"],
@@ -993,24 +1099,64 @@ class TestShadowEndpoints:
         scenes = client.post(f"{API}/scenes/discover", json=discover_body).json()
         scene_id = scenes[0]["id"]
 
-        gen_resp = client.post(
-            f"{API}/shadow/generate",
-            json={"scene_id": scene_id, "method": "percentile_arcsinh_gamma_balance", "params": {"preset": "Shadow"}},
+        client.post(
+            f"{API}/masks/{scene_id}/tool",
+            json={"tool": "bucket", "params": {"x": 0, "y": 0}, "class_value": 3},
         )
-        assert gen_resp.status_code == 200
-        layer = gen_resp.json()
-        assert layer["width"] == 32
-        assert layer["height"] == 32
-        assert layer["png_base64"]
 
-    def test_create_custom_preset(self, client: TestClient):
-        preset = {"name": "MyPreset", "method": "clahe", "params": {"clip_limit": 0.02}}
-        resp = client.post(f"{API}/shadow/presets", json=preset)
+        dry_resp = client.post(
+            f"{API}/masks/{scene_id}/swap-class",
+            json={"old_value": 3, "new_value": 7, "dry_run": True},
+        )
+        assert dry_resp.status_code == 200
+        dry_result = dry_resp.json()
+        assert dry_result["applied"] is False
+        assert dry_result["affected_pixels"] == 32 * 32
+
+        apply_resp = client.post(
+            f"{API}/masks/{scene_id}/swap-class",
+            json={"old_value": 3, "new_value": 7, "dry_run": False},
+        )
+        assert apply_resp.status_code == 200
+        assert apply_resp.json()["applied"] is True
+
+        # No pixels are class 3 anymore -- re-swapping finds nothing.
+        second_resp = client.post(
+            f"{API}/masks/{scene_id}/swap-class",
+            json={"old_value": 3, "new_value": 7, "dry_run": True},
+        )
+        assert second_resp.json()["affected_pixels"] == 0
+
+    def test_swap_class_same_value_is_noop(self, client: TestClient, scene_dir: Path):
+        discover_body = {
+            "source_root": str(scene_dir),
+            "scan_rule": {
+                "name": "test",
+                "rgb_patterns": ["raw*"],
+                "mask_patterns": [],
+                "max_depth": 3,
+                "file_extensions": [".tif"],
+            },
+            "exclude_globs": [],
+        }
+        scenes = client.post(f"{API}/scenes/discover", json=discover_body).json()
+        scene_id = scenes[0]["id"]
+        client.post(
+            f"{API}/masks/{scene_id}/tool",
+            json={"tool": "bucket", "params": {"x": 0, "y": 0}, "class_value": 3},
+        )
+
+        resp = client.post(
+            f"{API}/masks/{scene_id}/swap-class",
+            json={"old_value": 3, "new_value": 3, "dry_run": False},
+        )
         assert resp.status_code == 200
-
-        list_resp = client.get(f"{API}/shadow/presets")
-        names = {p["name"] for p in list_resp.json()}
-        assert "MyPreset" in names
+        body = resp.json()
+        assert body["affected_pixels"] == 0
+        assert body["applied"] is False
+        # A prior real paint (bucket, class 3) already moved this scene to
+        # in_progress -- the no-op swap must not reset that.
+        assert body["qa_status"] == "in_progress"
 
 
 class TestQaEndpoints:
@@ -1035,6 +1181,149 @@ class TestQaEndpoints:
         assert not any(r["scene_id"] == "scene-a" for r in flagged)
 
 
+class TestAutoQaStatus:
+    def _discover_one_scene(self, client: TestClient, scene_dir: Path) -> str:
+        discover_body = {
+            "source_root": str(scene_dir),
+            "scan_rule": {
+                "name": "test",
+                "rgb_patterns": ["raw*"],
+                "mask_patterns": [],
+                "max_depth": 3,
+                "file_extensions": [".tif"],
+            },
+            "exclude_globs": [],
+        }
+        scenes = client.post(f"{API}/scenes/discover", json=discover_body).json()
+        return scenes[0]["id"]
+
+    def test_paint_moves_todo_to_in_progress(self, client: TestClient, scene_dir: Path):
+        scene_id = self._discover_one_scene(client, scene_dir)
+        assert client.get(f"{API}/qa/status/{scene_id}").json()["status"] == "todo"
+
+        resp = client.post(
+            f"{API}/masks/{scene_id}/tool",
+            json={"tool": "bucket", "params": {"x": 0, "y": 0}, "class_value": 1},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["qa_status"] == "in_progress"
+        assert client.get(f"{API}/qa/status/{scene_id}").json()["status"] == "in_progress"
+
+    def test_paint_on_flagged_scene_stays_flagged(self, client: TestClient, scene_dir: Path):
+        scene_id = self._discover_one_scene(client, scene_dir)
+        client.post(f"{API}/qa/status/{scene_id}", json={"status": "flagged"})
+
+        resp = client.post(
+            f"{API}/masks/{scene_id}/tool",
+            json={"tool": "bucket", "params": {"x": 0, "y": 0}, "class_value": 1},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["qa_status"] == "flagged"
+        assert client.get(f"{API}/qa/status/{scene_id}").json()["status"] == "flagged"
+
+    def test_save_forces_validated_even_when_flagged(self, client: TestClient, scene_dir: Path, tmp_path: Path):
+        scene_id = self._discover_one_scene(client, scene_dir)
+        client.post(f"{API}/qa/status/{scene_id}", json={"status": "flagged"})
+        client.post(
+            f"{API}/masks/{scene_id}/tool",
+            json={"tool": "bucket", "params": {"x": 0, "y": 0}, "class_value": 1},
+        )
+
+        out_root = tmp_path / "output"
+        save_resp = client.post(
+            f"{API}/masks/{scene_id}/save",
+            json={
+                "output_format": "geotiff_rgba",
+                "output_root": str(out_root),
+                "folder_structure_template": "{scene_id}/Mask.tif",
+                "copy_raw": False,
+                "copy_shadow": False,
+                "preserve_georef": True,
+                "resolution_mode": "native",
+                "target_resolution": None,
+                "compress": None,
+            },
+        )
+        assert save_resp.status_code == 200
+        assert save_resp.json()["qa_status"] == "validated"
+        assert client.get(f"{API}/qa/status/{scene_id}").json()["status"] == "validated"
+
+    def test_discovery_marks_previously_saved_scene_validated(
+        self, client: TestClient, scene_dir: Path, tmp_path: Path
+    ):
+        """A scene whose output mask already exists on disk (from a past
+        session) must show up "validated" from discovery alone, without the
+        user opening it first -- exercises the /scenes/discover ->
+        _apply_validated_from_disk path, which needs an active SaveConfig
+        to know where to look (created here via a session, matching how the
+        real app always has one)."""
+        session_body = {
+            "schema_version": 1,
+            "id": "sess-validated-detect",
+            "name": "Validated Detect",
+            "discovery": {
+                "source_root": str(scene_dir),
+                "scan_rule": {
+                    "name": "test",
+                    "rgb_patterns": ["raw*"],
+                    "mask_patterns": [],
+                    "inference_patterns": [],
+                    "max_depth": 3,
+                    "file_extensions": [".tif"],
+                },
+                "exclude_globs": [],
+                "inference_root": None,
+            },
+            "active_palette_id": "",
+            "active_class_ids": [],
+            "save_config": {
+                "output_format": "geotiff_rgba",
+                "output_root": str(tmp_path / "output"),
+                "folder_structure_template": "{scene_id}/Mask.tif",
+                "copy_raw": False,
+                "copy_shadow": False,
+                "preserve_georef": True,
+                "resolution_mode": "native",
+                "target_resolution": None,
+                "compress": "LZW",
+            },
+            "ui_state": {},
+            "qa_state": {},
+            "recent_sessions": [],
+        }
+        assert client.post(f"{API}/sessions", json=session_body).status_code == 200
+
+        scene_id = self._discover_one_scene(client, scene_dir)
+        client.post(
+            f"{API}/masks/{scene_id}/tool",
+            json={"tool": "bucket", "params": {"x": 0, "y": 0}, "class_value": 1},
+        )
+        save_resp = client.post(
+            f"{API}/masks/{scene_id}/save",
+            json=session_body["save_config"],
+        )
+        assert save_resp.status_code == 200
+
+        # Simulate a fresh process: reset in-memory state (clearing
+        # scenes_by_session and the mask buffer) but keep what's on disk --
+        # session_store and the just-saved mask file both survive this,
+        # which is exactly the "app restarted" scenario being tested.
+        import api.state as api_state_module
+
+        home = api_state_module.get_state().home
+        api_state_module.reset_state(home)
+
+        rediscover_id = self._discover_one_scene(client, scene_dir)
+        assert rediscover_id == scene_id
+        rediscover_resp = client.post(
+            f"{API}/scenes/discover",
+            json=session_body["discovery"],
+        )
+        entry = next(e for e in rediscover_resp.json() if e["id"] == scene_id)
+        assert entry["qa_status"] == "validated"
+        assert entry["mode"] == "review"
+
+
 class TestToolsListing:
     def test_lists_all_four_tools(self, client: TestClient):
         resp = client.get(f"{API}/tools")
@@ -1049,8 +1338,7 @@ class TestStatsExport:
             "source_root": str(scene_dir),
             "scan_rule": {
                 "name": "test",
-                "raw_patterns": ["raw*"],
-                "shadow_patterns": [],
+                "rgb_patterns": ["raw*"],
                 "mask_patterns": [],
                 "max_depth": 3,
                 "file_extensions": [".tif"],

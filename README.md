@@ -14,10 +14,11 @@ MaskForge offers configurable scene discovery instead of a hardcoded folder conv
 - **Class palettes** — define classes with names, colors, and values; save palettes for reuse; activate a subset per session.
 - **Painting tools** — brush, bucket fill, polygon, and an image-guided auto-fill, all vectorized for large images and rendered through in-place canvas patching for fast, responsive annotation even on large masks.
 - **Auto-segment on any combination of views** — cluster on any checked subset of a scene's RGB views (stacked band-wise), not just a fixed raw/shadow/both choice, giving the clustering more information to separate visually similar colors.
+- **External inference import** — detect a class-map raster (`.npz` or GeoTIFF) produced by an external ML pipeline alongside a scene, or under a separate inference output root for zarr scenes, and copy it into the mask as a starting point for correction.
+- **Swap class** — bulk-reassign every pixel of one class to another across the whole mask, for fixing a mistaken class assignment without repainting.
 - **Color picker with safe remapping** — pick colors in HSV/RGB/HEX; remapping an already-used color previews the affected pixel count before applying.
 - **Border contours** — thin, non-dilated class boundaries rendered live, cached incrementally.
 - **Flexible export** — GeoTIFF (RGBA/RGB) or PNG, custom output folder structure, optional resampling (native, or arbitrary target resolution with nearest or majority/"mode" categorical downsampling).
-- **Shadow/contrast generation** — when a shadow layer is missing, generate one from the raw image using a percentile/arcsinh/gamma pipeline, CLAHE, HSV-based shadow indexing, or DEM hillshade — never overwrites a manually supplied file.
 - **Session persistence & autosave** — full session state (discovery config, active palette, save settings, UI state) persisted locally, with periodic autosave and crash recovery.
 - **QA workflow** — per-scene status (todo / in progress / validated / flagged), filterable, with batch navigation.
 - **Review mode** — before/after diff overlay for correcting existing masks.

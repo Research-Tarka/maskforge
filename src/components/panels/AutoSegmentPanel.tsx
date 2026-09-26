@@ -28,6 +28,7 @@ function rgbString(color: number[]): string {
 export default function AutoSegmentPanel() {
   const activeScene = useSessionStore((s) => s.activeScene());
   const bumpSceneRefreshToken = useSessionStore((s) => s.bumpSceneRefreshToken);
+  const updateScene = useSessionStore((s) => s.updateScene);
   const activeClasses = useClassStore((s) => s.activeClasses());
 
   const assignMode = useAutoSegmentStore((s) => s.assignMode);
@@ -134,6 +135,7 @@ export default function AutoSegmentPanel() {
     try {
       const res = await applyAutoSegment(activeScene.id, { cluster_to_class: clusterToClass });
       setResult(`Applied to ${res.bbox[2] - res.bbox[0]}x${res.bbox[3] - res.bbox[1]} px region.`);
+      updateScene(activeScene.id, { qa_status: res.qa_status });
       setPreview(null);
       setAssignments({});
       setAssignMode(false);

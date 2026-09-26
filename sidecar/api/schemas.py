@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-IPC_CONTRACT_VERSION = "1.1.0"
+IPC_CONTRACT_VERSION = "1.4.0"
 
 
 # ===========================================================================
@@ -52,15 +52,21 @@ class SceneEntry(BaseModel):
     # populated for a zarr-store scene; empty for a plain-file scene (where
     # raw_path/shadow_path are the only two views that can ever exist).
     rgb_composites: dict[str, str] = Field(default_factory=dict)
+    # Path to an inference class-map raster produced by an external ML
+    # pipeline, if one was found for this scene -- see
+    # maskforge_core.plugins.inference_reader. None means no inference is
+    # available; the frontend's "Copy inference to mask" action stays
+    # disabled in that case.
+    inference_path: str | None = None
 
 
 class ScanRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    raw_patterns: list[str] = Field(default_factory=list)
-    shadow_patterns: list[str] = Field(default_factory=list)
+    rgb_patterns: list[str] = Field(default_factory=list)
     mask_patterns: list[str] = Field(default_factory=list)
+    inference_patterns: list[str] = Field(default_factory=lambda: ["*class_map*", "*inference*"])
     max_depth: int = 5
     file_extensions: list[str] = Field(default_factory=list)
 
@@ -71,6 +77,11 @@ class DiscoveryConfig(BaseModel):
     source_root: str
     scan_rule: ScanRule
     exclude_globs: list[str] = Field(default_factory=list)
+    # Root of an external ML pipeline's inference output, for resolving a
+    # zarr-store scene's inference class map (see
+    # scene_discovery.DiscoveryConfig.inference_root for the path
+    # convention). None means no inference is available for any zarr scene.
+    inference_root: str | None = None
 
 
 class SaveConfig(BaseModel):
@@ -152,6 +163,11 @@ class ToolResponse(BaseModel):
     png_base64: str
     bbox: tuple[int, int, int, int]
     changed_pixels: int
+    # The scene's QA status after this change was applied (see
+    # masks.py::_auto_update_qa_status) -- included so the frontend can
+    # update its local scene list without a separate round trip, since the
+    # status is now server-derived rather than purely client-set.
+    qa_status: Literal["todo", "in_progress", "validated", "flagged"]
 
 
 class AutoSegmentRequest(BaseModel):
@@ -211,6 +227,10 @@ class ApplyAutoSegmentComponentRequest(BaseModel):
 class SaveResponse(BaseModel):
     path: str
     bytes_written: int
+    # Always "validated" after a successful save (see
+    # masks.py::_auto_update_qa_status) -- saving a mask is an unconditional
+    # override, even for a scene that was "flagged".
+    qa_status: Literal["todo", "in_progress", "validated", "flagged"]
 
 
 class RemapRequest(BaseModel):
@@ -224,6 +244,26 @@ class RemapRequest(BaseModel):
 class RemapResponse(BaseModel):
     affected_pixels: int
     applied: bool
+    qa_status: Literal["todo", "in_progress", "validated", "flagged"]
+
+
+class SwapClassRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Class *values* (not colors) -- unlike /remap, which matches by the
+    # mask's rendered RGB (ambiguous for the reserved Nodata pseudo-class,
+    # which always renders white regardless of its class value 255). This
+    # is a direct, unambiguous "every pixel currently class A becomes class
+    # B" action, e.g. to fix a mistaken bulk assignment.
+    old_value: int
+    new_value: int
+    dry_run: bool = False
+
+
+class SwapClassResponse(BaseModel):
+    affected_pixels: int
+    applied: bool
+    qa_status: Literal["todo", "in_progress", "validated", "flagged"]
 
 
 class UndoRedoResponse(BaseModel):
@@ -232,22 +272,6 @@ class UndoRedoResponse(BaseModel):
 
 class DeletedResponse(BaseModel):
     deleted: bool = True
-
-
-class ShadowGenerateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    scene_id: str
-    method: str
-    params: dict[str, Any] = Field(default_factory=dict)
-
-
-class ShadowPreset(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    method: str
-    params: dict[str, Any] = Field(default_factory=dict)
 
 
 class ClassStats(BaseModel):

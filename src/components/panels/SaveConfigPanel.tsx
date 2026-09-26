@@ -296,8 +296,11 @@ export default function SaveConfigPanel() {
       // The primary mask save (not the training copy) is what marks a scene
       // "done": reflect that immediately in local state instead of waiting
       // for a manual re-discovery or a manual QA click, then move on to the
-      // next scene that still needs annotation.
-      updateScene(activeScene.id, { mode: "review", mask_path: res.path, qa_status: "validated" });
+      // next scene that still needs annotation. qa_status comes from the
+      // server response (always "validated" after a save -- see
+      // masks.py::_auto_update_qa_status), not hardcoded here, so this
+      // stays correct if that rule ever changes.
+      updateScene(activeScene.id, { mode: "review", mask_path: res.path, qa_status: res.qa_status });
       goToNextUnfinishedScene();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

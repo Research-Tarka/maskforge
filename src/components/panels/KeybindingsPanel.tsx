@@ -1,6 +1,8 @@
 /**
  * Editable shortcut list. Clicking "Rebind" captures the next keydown
- * event as the new chord for that action; Escape cancels capture.
+ * event as the new chord for that action; Escape cancels capture. Chords
+ * are matched by KeyboardEvent.key (the character produced), which already
+ * reflects the OS's active keyboard layout -- see uiStore.ts.
  */
 
 import { useEffect, useState } from "react";

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from maskforge_core.scene_discovery import ScanRule as CoreScanRule
 from maskforge_core.session import SessionState as CoreSessionState
 
 from ..schemas import DeletedResponse, SessionState
@@ -26,8 +27,29 @@ def _to_core(s: SessionState) -> CoreSessionState:
     )
 
 
+def _migrate_discovery(discovery: dict) -> dict:
+    """Normalize a persisted session's discovery dict to the current
+    schema before Pydantic validation -- a session saved before the
+    raw_patterns/shadow_patterns -> rgb_patterns rename (or missing
+    inference_patterns/inference_root entirely) would otherwise fail
+    SessionState.model_validate with an extra_forbidden error on every GET
+    /sessions call, since ScanRule forbids unrecognized fields. Round-trips
+    scan_rule through the core ScanRule's own from_dict/to_dict, which
+    already knows how to fold the old field names in -- see
+    maskforge_core.scene_discovery.ScanRule.from_dict.
+    """
+    migrated = dict(discovery)
+    scan_rule = migrated.get("scan_rule")
+    if scan_rule is not None:
+        migrated["scan_rule"] = CoreScanRule.from_dict(scan_rule).to_dict()
+    migrated.setdefault("inference_root", None)
+    return migrated
+
+
 def _to_schema(s: CoreSessionState) -> SessionState:
-    return SessionState.model_validate(s.to_dict())
+    d = s.to_dict()
+    d["discovery"] = _migrate_discovery(d["discovery"])
+    return SessionState.model_validate(d)
 
 
 @router.get("", response_model=list[SessionState])

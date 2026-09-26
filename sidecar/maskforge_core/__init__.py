@@ -1,5 +1,5 @@
 """MaskForge core: raster I/O, drawing tools, class configs, scene discovery,
-session persistence, contours, QA workflow, and shadow generation.
+session persistence, contours, and QA workflow.
 
 This package has no FastAPI/HTTP dependency — it is pure logic, usable
 standalone or embedded in the ``api`` package's HTTP server.
@@ -15,5 +15,4 @@ __all__ = [
     "session",
     "contours",
     "qa_workflow",
-    "shadow_gen",
 ]

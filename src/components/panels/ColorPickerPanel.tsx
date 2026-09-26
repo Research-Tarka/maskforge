@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { HexColorPicker, HexColorInput } from "react-colorful";
-import { useClassStore } from "@/state/classStore";
+import { useClassStore, NODATA_CLASS_ID } from "@/state/classStore";
 import { useSessionStore } from "@/state/sessionStore";
 import { updatePalette, remapColor } from "@/api/client";
 import Dialog from "@/components/common/Dialog";
@@ -32,6 +32,7 @@ export default function ColorPickerPanel() {
   const activePalette = useClassStore((s) => s.activePalette());
   const upsertPalette = useClassStore((s) => s.upsertPalette);
   const activeScene = useSessionStore((s) => s.activeScene());
+  const updateScene = useSessionStore((s) => s.updateScene);
 
   const [draftColor, setDraftColor] = useState<[number, number, number] | null>(null);
   const [mode, setMode] = useState<PickerMode>("hex");
@@ -55,6 +56,22 @@ export default function ColorPickerPanel() {
       <section className="panel color-picker-panel" aria-label="Color picker panel">
         <h3 className="panel__title">Color</h3>
         <p className="panel__hint">Select a class to edit its color.</p>
+      </section>
+    );
+  }
+
+  // Nodata is a synthetic pseudo-class, not part of the persisted palette --
+  // its color (white) is fixed to match the sidecar's unpainted-pixel render
+  // convention (see raster_io.py), so it isn't recolorable here. Use "Swap
+  // class" in the Tools panel to move pixels to/from Nodata instead.
+  if (selectedClass.id === NODATA_CLASS_ID) {
+    return (
+      <section className="panel color-picker-panel" aria-label="Color picker panel">
+        <h3 className="panel__title">Color — {selectedClass.name}</h3>
+        <p className="panel__hint">
+          Nodata&apos;s color is fixed (matches the unpainted-pixel render). Use &quot;Swap
+          class&quot; in the Tools panel to move pixels to or from Nodata.
+        </p>
       </section>
     );
   }
@@ -111,11 +128,12 @@ export default function ColorPickerPanel() {
   const handleConfirmRemap = async () => {
     if (!activeScene) return;
     try {
-      await remapColor(activeScene.id, {
+      const result = await remapColor(activeScene.id, {
         old_color: selectedClass.color,
         new_color: currentColor,
         dry_run: false,
       });
+      updateScene(activeScene.id, { qa_status: result.qa_status });
       await commitColor(currentColor);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

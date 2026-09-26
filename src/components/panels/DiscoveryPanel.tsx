@@ -1,14 +1,17 @@
 /**
  * Configures DiscoveryConfig (source root, ScanRule filename patterns for
- * raw/shadow/mask, max depth, extensions), triggers scene discovery via
+ * RGB/mask/inference, max depth, extensions), triggers scene discovery via
  * POST /scenes/discover, and shows the resulting SceneEntry list with QA
  * status badges and mode/status filtering.
  *
  * Patterns match against a bare filename within each scanned directory
  * (fnmatch-style: `*` and `?` wildcards, no `/` path segments — a scene's
- * raw/shadow/mask files are expected to sit directly in its own directory,
- * one directory per scene, discovered up to max_depth levels below the
- * source root). E.g. "RGB_Raw.tif" or "*_raw.tif", not "**\/raw/*.tif".
+ * RGB/mask files are expected to sit directly in its own directory, one
+ * directory per scene, discovered up to max_depth levels below the source
+ * root). E.g. "RGB.tif" or "*_rgb.tif", not "**\/rgb/*.tif". A zarr-store
+ * scene doesn't use these RGB/mask patterns at all -- its RGB composites
+ * are auto-detected from the store's own array names (any "rgb*"-prefixed
+ * array), so for that setup only the inference patterns/root below apply.
  *
  * The source root picker uses the Tauri native folder dialog (the
  * `pick_folder` command) when running inside Tauri; in browser-fallback dev
@@ -23,9 +26,9 @@ import type { DiscoveryConfig, QaStatus, ScanRule, SceneMode } from "@/types/api
 
 const DEFAULT_SCAN_RULE: ScanRule = {
   name: "default",
-  raw_patterns: ["*raw*.tif", "*RGB_Raw*.tif", "*raw*.png"],
-  shadow_patterns: ["*shadow*.tif", "*RGB_Shadow*.tif", "*shadow*.png"],
+  rgb_patterns: ["*rgb*.tif", "*RGB*.tif", "*rgb*.png"],
   mask_patterns: ["*mask*.tif", "*Mask*.tif", "*mask*.png"],
+  inference_patterns: ["*class_map*", "*inference*"],
   max_depth: 5,
   file_extensions: [".tif", ".tiff", ".png", ".jpg", ".zarr"],
 };
@@ -52,7 +55,12 @@ export default function DiscoveryPanel() {
   const clearSceneSelection = useSessionStore((s) => s.clearSceneSelection);
 
   const [config, setConfig] = useState<DiscoveryConfig>(
-    session?.discovery ?? { source_root: "", scan_rule: DEFAULT_SCAN_RULE, exclude_globs: [] },
+    session?.discovery ?? {
+      source_root: "",
+      scan_rule: DEFAULT_SCAN_RULE,
+      exclude_globs: [],
+      inference_root: null,
+    },
   );
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +78,11 @@ export default function DiscoveryPanel() {
   const handlePickRoot = async () => {
     const dir = await pickFolder();
     if (dir) setConfig((c) => ({ ...c, source_root: dir }));
+  };
+
+  const handlePickInferenceRoot = async () => {
+    const dir = await pickFolder();
+    if (dir) setConfig((c) => ({ ...c, inference_root: dir }));
   };
 
   const handleRunDiscovery = async () => {
@@ -137,22 +150,12 @@ export default function DiscoveryPanel() {
       </p>
 
       <div className="panel__field">
-        <label htmlFor="raw-patterns">Raw filename patterns</label>
+        <label htmlFor="rgb-patterns">RGB filename patterns</label>
         <input
-          id="raw-patterns"
+          id="rgb-patterns"
           type="text"
-          value={config.scan_rule.raw_patterns.join(", ")}
-          onChange={(e) => updateScanRule({ raw_patterns: parseList(e.target.value) })}
-        />
-      </div>
-
-      <div className="panel__field">
-        <label htmlFor="shadow-patterns">Shadow filename patterns</label>
-        <input
-          id="shadow-patterns"
-          type="text"
-          value={config.scan_rule.shadow_patterns.join(", ")}
-          onChange={(e) => updateScanRule({ shadow_patterns: parseList(e.target.value) })}
+          value={config.scan_rule.rgb_patterns.join(", ")}
+          onChange={(e) => updateScanRule({ rgb_patterns: parseList(e.target.value) })}
         />
       </div>
 
@@ -164,6 +167,41 @@ export default function DiscoveryPanel() {
           value={config.scan_rule.mask_patterns.join(", ")}
           onChange={(e) => updateScanRule({ mask_patterns: parseList(e.target.value) })}
         />
+      </div>
+
+      <div className="panel__field">
+        <label htmlFor="inference-patterns">Inference filename patterns</label>
+        <input
+          id="inference-patterns"
+          type="text"
+          value={config.scan_rule.inference_patterns.join(", ")}
+          onChange={(e) => updateScanRule({ inference_patterns: parseList(e.target.value) })}
+        />
+        <p className="panel__hint">
+          Matches an externally-produced inference class map (.npz or GeoTIFF) sitting alongside a
+          plain-file scene. For a zarr-store scene, set the inference output root below instead.
+        </p>
+      </div>
+
+      <div className="panel__field">
+        <label htmlFor="inference-root">Inference output root</label>
+        <div className="panel__field-row">
+          <input
+            id="inference-root"
+            type="text"
+            value={config.inference_root ?? ""}
+            onChange={(e) => setConfig((c) => ({ ...c, inference_root: e.target.value || null }))}
+            placeholder="D:\data\inference_output"
+          />
+          <button type="button" onClick={() => void handlePickInferenceRoot()}>
+            Browse…
+          </button>
+        </div>
+        <p className="panel__hint">
+          Root of an ML pipeline's inference output (expects
+          <code>&lt;tile_id&gt;/&lt;sensor&gt;/&lt;scene_id&gt;/class_map.npz</code>). Only used for
+          zarr-store scenes. Leave empty if you have no inference to load.
+        </p>
       </div>
 
       <div className="panel__field-row">
