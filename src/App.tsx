@@ -27,7 +27,7 @@ import { useClassStore } from "@/state/classStore";
 import { useViewportStore } from "@/state/viewportStore";
 import { useToolStore } from "@/state/toolStore";
 import { useLayoutStore, layerLabel, viewKeysForScene, visibleOrderedLayerKeys, MASK_KEY } from "@/state/layoutStore";
-import { getPalettes, getScenes, getSceneLayers, getSessions, undoMask, redoMask } from "@/api/client";
+import { getPalettes, getScenes, getSceneLayers, getSessions, undoMask, redoMask, saveMask } from "@/api/client";
 import type { SceneLayers } from "@/types/api";
 import "@/styles/app.css";
 
@@ -50,8 +50,8 @@ export default function App() {
   const sceneRefreshToken = useSessionStore((s) => s.sceneRefreshToken);
   const bumpSceneRefreshToken = useSessionStore((s) => s.bumpSceneRefreshToken);
   const bumpStatsRefreshToken = useSessionStore((s) => s.bumpStatsRefreshToken);
-  const flushAutosave = useSessionStore((s) => s.flushAutosave);
   const goToNextScene = useSessionStore((s) => s.goToNextScene);
+  const goToNextUnfinishedScene = useSessionStore((s) => s.goToNextUnfinishedScene);
   const goToPreviousScene = useSessionStore((s) => s.goToPreviousScene);
   const updateScene = useSessionStore((s) => s.updateScene);
 
@@ -341,9 +341,14 @@ export default function App() {
       if (is("action.save")) {
         // Ctrl+S defaults to the browser's "Save page" dialog -- always
         // preventDefault for this chord regardless of whether there's an
-        // active session to flush.
+        // active scene to save.
         e.preventDefault();
-        if (session) void flushAutosave();
+        if (activeScene && session?.save_config) {
+          void saveMask(activeScene.id, session.save_config).then((res) => {
+            updateScene(activeScene.id, { mode: "review", mask_path: res.path, qa_status: res.qa_status });
+            goToNextUnfinishedScene();
+          });
+        }
         return;
       }
       if (is("action.flagScene")) {
@@ -364,8 +369,8 @@ export default function App() {
     activeScene,
     bumpSceneRefreshToken,
     session,
-    flushAutosave,
     goToNextScene,
+    goToNextUnfinishedScene,
     goToPreviousScene,
     setActiveTool,
     setLastUsedTool,

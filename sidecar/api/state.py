@@ -122,29 +122,46 @@ class AppState:
         with self._lock:
             self.mask_buffers[scene_id] = buf
 
-    def get_active_save_config(self):
-        """Best-effort lookup of "the" active SaveConfig, mirroring
-        get_active_palette's scan-every-persisted-session approach (there is
-        no real per-scene session scoping yet). Used to locate a mask that
-        was already saved to an output_root separate from the scene's own
-        discovery source_root -- discovery never sees such a mask (it only
-        scans source_root), so SceneEntry.mask_path stays None for it even
-        though a file exists on disk.
+    def get_active_save_config(self, session_id: str = ""):
+        """Look up "the" active SaveConfig, preferring ``session_id`` (the
+        session actually being worked in) when given, and falling back to a
+        best-effort scan of every persisted session otherwise.
 
-        Scans every session persisted on disk (session_store.list_all()),
-        not just ones already registered in scenes_by_session -- a fresh
-        sidecar process has an empty scenes_by_session until some scene
-        discovery has actually run once, which would otherwise make the
-        very first /scenes or /scenes/discover call after startup (the
-        common case: the app just booted and is loading the user's most
-        recent session) miss every previously-saved mask on disk, since
-        there'd be no session yet for this to find a save_config through.
+        Used to locate a mask that was already saved to an output_root
+        separate from the scene's own discovery source_root -- discovery
+        never sees such a mask (it only scans source_root), so
+        SceneEntry.mask_path stays None for it even though a file exists on
+        disk.
+
+        ``session.save_config`` is always a non-empty dict (it default-
+        factories to SaveConfig().to_dict()), so scanning "every session on
+        disk, first truthy save_config wins" without a session_id can pick
+        an unrelated session's output_root -- e.g. alphabetically-first by
+        session id -- causing already-saved masks in the *real* active
+        session's output folder to go undetected. Callers that know which
+        session is active (discovery, /scenes) should always pass it.
+
+        The no-session_id fallback path still exists for callers without
+        that context (e.g. _ensure_buffer): scans session_store.list_all()
+        (every session on disk), not just ones already registered in
+        scenes_by_session -- a fresh sidecar process has an empty
+        scenes_by_session until some scene discovery has actually run once,
+        which would otherwise make the very first /scenes or
+        /scenes/discover call after startup (the common case: the app just
+        booted and is loading the user's most recent session) miss every
+        previously-saved mask on disk, since there'd be no session yet for
+        this to find a save_config through.
 
         Returns a maskforge_core.session.SaveConfig (not the dict that
         SessionState.save_config actually stores it as -- session.py's
         SessionState keeps every nested field as a plain dict, unlike
         api.schemas' Pydantic model of a similar name)."""
         from maskforge_core.session import SaveConfig as CoreSaveConfig
+
+        if session_id:
+            session = self.session_store.get(session_id)
+            if session is not None and session.save_config:
+                return CoreSaveConfig.from_dict(session.save_config)
 
         for session in self.session_store.list_all():
             if session.save_config:

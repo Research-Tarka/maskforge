@@ -35,7 +35,7 @@ from ..state import MaskBuffer, get_state
 router = APIRouter(prefix="/masks", tags=["masks"])
 
 
-def resolve_saved_mask_path(scene_id: str) -> str | None:
+def resolve_saved_mask_path(scene_id: str, session_id: str = "") -> str | None:
     """Re-derive the path the active SaveConfig would have written this
     scene's mask to, and return it if a file actually exists there.
 
@@ -47,9 +47,15 @@ def resolve_saved_mask_path(scene_id: str) -> str | None:
     already annotated in a past session reopens with the real mask, not a
     blank canvas) and the discovery routes (so a scene already saved shows
     up "validated" immediately, without the user needing to open it first).
+
+    ``session_id``, when given, scopes the SaveConfig lookup to that
+    session specifically -- without it, get_active_save_config() falls back
+    to an arbitrary (alphabetically-first-by-id) persisted session, which
+    silently probes the wrong output_root whenever more than one session
+    exists on disk and causes already-saved masks to go undetected.
     """
     state = get_state()
-    save_config = state.get_active_save_config()
+    save_config = state.get_active_save_config(session_id)
     if save_config is None or not save_config.output_root:
         return None
     try:

@@ -18,7 +18,7 @@ from .masks import _ensure_buffer, resolve_saved_mask_path
 router = APIRouter(prefix="/scenes", tags=["scenes"])
 
 
-def _apply_validated_from_disk(entries: list[CoreSceneEntry]) -> None:
+def _apply_validated_from_disk(entries: list[CoreSceneEntry], session_id: str = "") -> None:
     """For every discovered scene not already known to have a mask
     (mode == "annotate"), check whether the active SaveConfig's output path
     already has a saved mask file on disk -- if so, mark it "review"/
@@ -27,12 +27,16 @@ def _apply_validated_from_disk(entries: list[CoreSceneEntry]) -> None:
     fallback, reused here via resolve_saved_mask_path) and records the
     status in the QaWorkflow store so it's consistent with what /qa/status
     and a later /masks/{id}/tool call would report.
+
+    ``session_id`` scopes the SaveConfig lookup to the session actually
+    being discovered for, not an arbitrary persisted one -- see
+    get_active_save_config's docstring.
     """
     workflow = get_state().qa_workflow
     for entry in entries:
         if entry.mode == "review":
             continue
-        found = resolve_saved_mask_path(entry.id)
+        found = resolve_saved_mask_path(entry.id, session_id)
         if found is None:
             continue
         entry.mask_path = found
@@ -90,7 +94,7 @@ def list_scenes(session_id: str = "") -> list[SceneEntry]:
             except (KeyError, TypeError):
                 return []
             entries = discover_scenes(core_cfg)
-            _apply_validated_from_disk(entries)
+            _apply_validated_from_disk(entries, session_id)
             state.set_scenes(session_id, entries)
             return [_to_schema_entry(e) for e in entries]
 
@@ -101,7 +105,7 @@ def list_scenes(session_id: str = "") -> list[SceneEntry]:
 def discover(cfg: DiscoveryConfig, session_id: str = "") -> list[SceneEntry]:
     core_cfg = _to_core_discovery(cfg)
     entries = discover_scenes(core_cfg)
-    _apply_validated_from_disk(entries)
+    _apply_validated_from_disk(entries, session_id)
     if session_id:
         get_state().set_scenes(session_id, entries)
     else:

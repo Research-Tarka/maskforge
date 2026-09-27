@@ -78,7 +78,7 @@ export const DEFAULT_KEYBINDINGS: Record<KeybindingAction, string> = {
   "view.panUp": "ArrowUp",
   "view.panDown": "ArrowDown",
   "scene.next": "Ctrl+D",
-  "scene.previous": "Ctrl+A",
+  "scene.previous": "Ctrl+Q",
   "panel.toggleTools": "1",
   "panel.toggleClasses": "2",
   "panel.toggleDiscovery": "3",
