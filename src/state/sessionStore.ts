@@ -4,7 +4,7 @@
  */
 
 import { create } from "zustand";
-import type { SceneEntry, SessionState } from "@/types/api";
+import type { QaStatus, SceneEntry, SceneMode, SessionState } from "@/types/api";
 import { updateSession } from "@/api/client";
 
 const AUTOSAVE_DEBOUNCE_MS = 500;
@@ -18,6 +18,18 @@ export function isSceneDone(scene: SceneEntry): boolean {
   return scene.mode === "review" || scene.qa_status === "validated";
 }
 
+/** Same predicate as DiscoveryPanel's own filteredScenes memo -- kept here
+ * (not local panel state) so Ctrl+A/D scene navigation can skip scenes the
+ * Discovery panel's QA/mode filters currently hide, instead of walking the
+ * full unfiltered scene list. */
+export function matchesSceneFilter(
+  scene: SceneEntry,
+  qaFilter: QaStatus | "all",
+  modeFilter: SceneMode | "all",
+): boolean {
+  return (qaFilter === "all" || scene.qa_status === qaFilter) && (modeFilter === "all" || scene.mode === modeFilter);
+}
+
 export type SidecarConnectionStatus = "connecting" | "connected" | "disconnected";
 
 interface SessionStoreState {
@@ -28,6 +40,11 @@ interface SessionStoreState {
    * process a subset) -- purely a local UI preference, not part of the
    * SessionState schema synced with the sidecar. */
   selectedSceneIds: Set<string>;
+  /** QA-status/mode filters shown in the Discovery panel -- lifted up here
+   * (rather than kept as panel-local state) so scene navigation (Ctrl+A/D)
+   * can respect them too, not just the Discovery panel's own list. */
+  qaFilter: QaStatus | "all";
+  modeFilter: SceneMode | "all";
   dirty: boolean;
   saving: boolean;
   lastSavedAt: number | null;
@@ -59,6 +76,8 @@ interface SessionStoreState {
   toggleSceneSelection: (sceneId: string) => void;
   selectAllScenes: (sceneIds: string[]) => void;
   clearSceneSelection: () => void;
+  setQaFilter: (filter: QaStatus | "all") => void;
+  setModeFilter: (filter: SceneMode | "all") => void;
   setActiveSceneIndex: (index: number) => void;
   goToNextScene: () => void;
   goToNextUnfinishedScene: () => void;
@@ -111,6 +130,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   scenes: [],
   activeSceneIndex: 0,
   selectedSceneIds: new Set<string>(),
+  qaFilter: "all",
+  modeFilter: "all",
   dirty: false,
   saving: false,
   lastSavedAt: null,
@@ -187,38 +208,60 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
 
   clearSceneSelection: () => set({ selectedSceneIds: new Set<string>() }),
 
+  setQaFilter: (filter) => set({ qaFilter: filter }),
+  setModeFilter: (filter) => set({ modeFilter: filter }),
+
   setActiveSceneIndex: (index) =>
     set((state) => ({
       activeSceneIndex: Math.min(Math.max(0, index), Math.max(0, state.scenes.length - 1)),
     })),
 
   goToNextScene: () =>
-    set((state) => ({
-      activeSceneIndex: Math.min(state.activeSceneIndex + 1, Math.max(0, state.scenes.length - 1)),
-    })),
+    set((state) => {
+      const { scenes, activeSceneIndex, qaFilter, modeFilter } = state;
+      for (let idx = activeSceneIndex + 1; idx < scenes.length; idx++) {
+        if (matchesSceneFilter(scenes[idx], qaFilter, modeFilter)) {
+          return { activeSceneIndex: idx };
+        }
+      }
+      return {};
+    }),
 
   goToNextUnfinishedScene: () =>
     set((state) => {
-      const { scenes, activeSceneIndex } = state;
+      const { scenes, activeSceneIndex, qaFilter, modeFilter } = state;
       if (scenes.length === 0) return {};
       // Search forward from just after the current scene, wrapping around,
       // so a scene already done -- either saved (mode "review") or
       // validated in the QA workflow (qa_status "validated") -- is skipped
-      // in favor of the next one still needing work. Falls back to just
-      // moving forward by one if every remaining scene is already done.
+      // in favor of the next one still needing work, and one hidden by the
+      // Discovery panel's current QA/mode filters is skipped too. Falls
+      // back to the plain next-scene behavior (also filter-aware) if every
+      // remaining scene is already done.
       for (let offset = 1; offset <= scenes.length; offset++) {
         const idx = (activeSceneIndex + offset) % scenes.length;
-        if (!isSceneDone(scenes[idx])) {
+        if (!isSceneDone(scenes[idx]) && matchesSceneFilter(scenes[idx], qaFilter, modeFilter)) {
           return { activeSceneIndex: idx };
         }
       }
-      return { activeSceneIndex: Math.min(activeSceneIndex + 1, scenes.length - 1) };
+      for (let idx = activeSceneIndex + 1; idx < scenes.length; idx++) {
+        if (matchesSceneFilter(scenes[idx], qaFilter, modeFilter)) {
+          return { activeSceneIndex: idx };
+        }
+      }
+      return {};
     }),
 
   goToPreviousScene: () =>
-    set((state) => ({
-      activeSceneIndex: Math.max(state.activeSceneIndex - 1, 0),
-    })),
+    set((state) => {
+      const { scenes, activeSceneIndex, qaFilter, modeFilter } = state;
+      for (let idx = activeSceneIndex - 1; idx >= 0; idx--) {
+        if (matchesSceneFilter(scenes[idx], qaFilter, modeFilter)) {
+          return { activeSceneIndex: idx };
+        }
+      }
+      return {};
+    }),
 
   setConnectionStatus: (status) => set({ connectionStatus: status }),
 

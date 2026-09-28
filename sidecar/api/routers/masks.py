@@ -101,7 +101,18 @@ def _ensure_buffer(scene_id: str) -> MaskBuffer:
         else:
             rgba, _ = raster_io.read_image_any(mask_path)
         if rgba.ndim == 3 and rgba.shape[-1] == 4:
-            classes = raster_io.rgba_to_classes(rgba, {}, {})
+            palette = state.get_active_palette()
+            class_colors = palette.color_map() if palette is not None else {}
+            class_values = palette.value_map() if palette is not None else {}
+            classes = raster_io.rgba_to_classes(rgba, class_colors, class_values)
+        elif rgba.ndim == 3 and rgba.shape[-1] == 3:
+            # geotiff_rgb output format has no alpha channel -- NODATA_VALUE
+            # was encoded as black on save (see classes_to_rgb), not as
+            # transparency.
+            palette = state.get_active_palette()
+            class_colors = palette.color_map() if palette is not None else {}
+            class_values = palette.value_map() if palette is not None else {}
+            classes = raster_io.rgb_to_classes(rgba, class_colors, class_values)
         elif rgba.ndim == 2:
             classes = rgba.astype(np.uint8)
         else:

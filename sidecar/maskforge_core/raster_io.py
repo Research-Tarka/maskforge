@@ -360,6 +360,35 @@ def rgba_to_classes(
     return classes
 
 
+def rgb_to_classes(
+    mask_rgb: np.ndarray,
+    class_colors: dict[str, tuple[int, int, int]],
+    class_values: dict[str, int],
+) -> np.ndarray:
+    """Vectorized RGB (no alpha) -> class-index conversion, for masks saved
+    via the geotiff_rgb output format (see classes_to_rgb, which encodes
+    NODATA_VALUE as black (0, 0, 0) since it has no alpha channel to signal
+    "unpainted" with). Any pixel not matching a known class color -- black
+    or otherwise -- is left at NODATA_VALUE, mirroring rgba_to_classes'
+    unmatched-pixel behaviour.
+    """
+    h, w = mask_rgb.shape[:2]
+    classes = np.full((h, w), NODATA_VALUE, dtype=np.uint8)
+
+    for name, color in class_colors.items():
+        val = class_values.get(name)
+        if val is None:
+            continue
+        m = (
+            (mask_rgb[:, :, 0] == color[0])
+            & (mask_rgb[:, :, 1] == color[1])
+            & (mask_rgb[:, :, 2] == color[2])
+        )
+        classes[m] = val
+
+    return classes
+
+
 def classes_to_rgb(
     classes: np.ndarray,
     class_colors: dict[str, tuple[int, int, int]],
