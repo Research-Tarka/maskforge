@@ -240,11 +240,17 @@ def get_layers(scene_id: str, views: str = "") -> LayersResponse:
     # the user to touch a single pixel first.
     buf = _ensure_buffer(scene_id)
 
-    # A scene with no mask.tif on disk yet (never annotated) still has that
-    # freshly-created buffer -- render it instead of returning None, so the
-    # mask panel shows a paintable blank canvas immediately rather than
-    # "No mask yet" until the first stroke happens to succeed.
-    mask_layer = _layer_from_path(scene.mask_path) or _layer_from_mask_buffer(buf)
+    # Always render the live in-memory buffer, never the static file on
+    # disk: _ensure_buffer already loaded scene.mask_path's contents into
+    # buf.classes the first time this scene was opened, and every edit
+    # since (paint, undo/redo, auto-segment apply) mutates buf.classes in
+    # place without rewriting the file until the next explicit save. A
+    # scene with no mask.tif on disk yet (never annotated) still has that
+    # freshly-created buffer (entirely NODATA_VALUE) -- render it instead
+    # of returning None, so the mask panel shows a paintable blank canvas
+    # immediately rather than "No mask yet" until the first stroke happens
+    # to succeed.
+    mask_layer = _layer_from_mask_buffer(buf)
 
     # A scene discovered outside the zarr path (plain raw/shadow files) has
     # no rgb_composites entries -- fall back to its raw_path/shadow_path

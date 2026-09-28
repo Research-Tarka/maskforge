@@ -20,7 +20,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { isSceneDone, useSessionStore } from "@/state/sessionStore";
+import { isSceneDone, matchesSceneFilter, useSessionStore } from "@/state/sessionStore";
 import { discoverScenes, pickFolder } from "@/api/client";
 import type { DiscoveryConfig, QaStatus, ScanRule, SceneMode } from "@/types/api";
 
@@ -53,6 +53,10 @@ export default function DiscoveryPanel() {
   const toggleSceneSelection = useSessionStore((s) => s.toggleSceneSelection);
   const selectAllScenes = useSessionStore((s) => s.selectAllScenes);
   const clearSceneSelection = useSessionStore((s) => s.clearSceneSelection);
+  const qaFilter = useSessionStore((s) => s.qaFilter);
+  const setQaFilter = useSessionStore((s) => s.setQaFilter);
+  const modeFilter = useSessionStore((s) => s.modeFilter);
+  const setModeFilter = useSessionStore((s) => s.setModeFilter);
 
   const [config, setConfig] = useState<DiscoveryConfig>(
     session?.discovery ?? {
@@ -64,14 +68,9 @@ export default function DiscoveryPanel() {
   );
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [qaFilter, setQaFilter] = useState<QaStatus | "all">("all");
-  const [modeFilter, setModeFilter] = useState<SceneMode | "all">("all");
 
   const filteredScenes = useMemo(
-    () =>
-      scenes.filter(
-        (s) => (qaFilter === "all" || s.qa_status === qaFilter) && (modeFilter === "all" || s.mode === modeFilter),
-      ),
+    () => scenes.filter((s) => matchesSceneFilter(s, qaFilter, modeFilter)),
     [scenes, qaFilter, modeFilter],
   );
 
